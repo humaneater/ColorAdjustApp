@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0d0f12" />
+    <title>整体校色</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">C</span>
+          <div class="brand-copy">
+            <h1>整体校色</h1>
+            <p id="fileName">未载入图片</p>
+          </div>
+        </div>
+
+        <div class="header-actions">
+          <button id="resetButton" class="button button-secondary" type="button" disabled>
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+              <path d="M3 3v5h5" />
+            </svg>
+            重置
+          </button>
+          <button id="exportButton" class="button button-primary" type="button" disabled>
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <path d="m7 10 5 5 5-5" />
+              <path d="M12 15V3" />
+            </svg>
+            导出图片
+          </button>
+        </div>
+      </header>
+
+      <main id="previewStage" class="preview-stage">
+        <section class="preview-panel" aria-label="原图">
+          <span class="panel-label">原图</span>
+          <canvas id="originalCanvas" class="preview-canvas" hidden></canvas>
+        </section>
+
+        <div class="preview-divider" aria-hidden="true"></div>
+
+        <section id="processedPanel" class="preview-panel" aria-label="校色后的图片">
+          <span id="processedLabel" class="panel-label panel-label-accent">实时校色</span>
+          <canvas id="processedCanvas" class="preview-canvas" hidden></canvas>
+          <canvas id="aiCanvas" class="preview-canvas ai-canvas" hidden></canvas>
+        </section>
+
+        <button id="dropLayer" class="drop-layer" type="button" aria-label="选择或拖入图片">
+          <svg class="drop-symbol" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M16 5h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h3" />
+            <path d="m7 16 4-4 6 6" />
+            <path d="m15 17 2-2 3 3" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <path d="M9 3h6" />
+            <path d="M12 0v6" />
+          </svg>
+          <strong>拖入图片或 RAW</strong>
+          <small>JPG、PNG、WebP、ARW、RAW 等</small>
+        </button>
+
+        <input
+          id="fileInput"
+          type="file"
+          accept="image/*,.3fr,.arw,.bay,.cap,.cr2,.cr3,.crw,.cs1,.dc2,.dcr,.dcs,.dng,.drf,.eip,.erf,.fff,.fjs,.gpr,.iiq,.kdc,.mdc,.mef,.mos,.mrw,.nef,.nrw,.orf,.pef,.pxn,.qtk,.raf,.raw,.rw2,.rwl,.rwz,.sr2,.srf,.srw,.sti,.x3f"
+          hidden
+        />
+      </main>
+
+      <section class="controls" aria-label="色彩调整">
+        <fieldset id="controlsFieldset" class="controls-fieldset" disabled>
+          <div class="control-grid">
+            <div class="control-row" data-key="saturation">
+              <label for="saturation">饱和度</label>
+              <div class="slider-wrap">
+                <input id="saturation" type="range" min="-100" max="100" step="1" value="0" />
+                <span class="center-mark" aria-hidden="true"></span>
+              </div>
+              <output id="saturationValue" for="saturation">0</output>
+            </div>
+
+            <div class="control-row" data-key="hueShift">
+              <label for="hueShift">色相偏移</label>
+              <div class="slider-wrap">
+                <input id="hueShift" type="range" min="-100" max="100" step="1" value="0" />
+                <span class="center-mark" aria-hidden="true"></span>
+              </div>
+              <output id="hueShiftValue" for="hueShift">0</output>
+            </div>
+
+            <div class="control-row" data-key="vibrance">
+              <label for="vibrance">自然饱和度</label>
+              <div class="slider-wrap">
+                <input id="vibrance" type="range" min="-100" max="100" step="1" value="0" />
+                <span class="center-mark" aria-hidden="true"></span>
+              </div>
+              <output id="vibranceValue" for="vibrance">0</output>
+            </div>
+
+            <div class="control-row" data-key="brightness">
+              <label for="brightness">亮度</label>
+              <div class="slider-wrap">
+                <input id="brightness" type="range" min="-100" max="100" step="1" value="0" />
+                <span class="center-mark" aria-hidden="true"></span>
+              </div>
+              <output id="brightnessValue" for="brightness">0</output>
+            </div>
+
+            <div class="control-row" data-key="exposure">
+              <label for="exposure">曝光</label>
+              <div class="slider-wrap">
+                <input id="exposure" type="range" min="-100" max="100" step="1" value="0" />
+                <span class="center-mark" aria-hidden="true"></span>
+              </div>
+              <output id="exposureValue" for="exposure">0</output>
+            </div>
+
+            <div class="control-row" data-key="contrast">
+              <label for="contrast">对比度</label>
+              <div class="slider-wrap">
+                <input id="contrast" type="range" min="-100" max="100" step="1" value="0" />
+                <span class="center-mark" aria-hidden="true"></span>
+              </div>
+              <output id="contrastValue" for="contrast">0</output>
+            </div>
+
+            <div class="control-row" data-key="temperature">
+              <label for="temperature">色温</label>
+              <div class="slider-wrap">
+                <input id="temperature" type="range" min="-100" max="100" step="1" value="0" />
+                <span class="center-mark" aria-hidden="true"></span>
+              </div>
+              <output id="temperatureValue" for="temperature">0</output>
+            </div>
+
+            <div class="control-row" data-key="whiteBalance">
+              <label for="whiteBalance">白平衡</label>
+              <div class="slider-wrap">
+                <input id="whiteBalance" type="range" min="-100" max="100" step="1" value="0" />
+                <span class="center-mark" aria-hidden="true"></span>
+              </div>
+              <output id="whiteBalanceValue" for="whiteBalance">0</output>
+            </div>
+
+            <div class="control-row" data-key="shadows">
+              <label for="shadows">阴影强度</label>
+              <div class="slider-wrap">
+                <input id="shadows" type="range" min="-100" max="100" step="1" value="0" />
+                <span class="center-mark" aria-hidden="true"></span>
+              </div>
+              <output id="shadowsValue" for="shadows">0</output>
+            </div>
+
+            <div class="control-row" data-key="denoise">
+              <label for="denoise">降噪</label>
+              <div class="slider-wrap">
+                <input id="denoise" type="range" min="0" max="100" step="1" value="0" />
+              </div>
+              <output id="denoiseValue" for="denoise">0</output>
+            </div>
+
+            <div class="control-row" data-key="detail">
+              <label for="detail">细节保留</label>
+              <div class="slider-wrap">
+                <input id="detail" type="range" min="0" max="100" step="1" value="0" />
+              </div>
+              <output id="detailValue" for="detail">0</output>
+            </div>
+          </div>
+        </fieldset>
+
+        <section id="aiPanel" class="ai-panel" aria-label="人像美化">
+          <div class="ai-panel-heading">
+            <strong>人像美化</strong>
+            <span id="aiStatus" role="status">正在检测 ComfyUI...</span>
+          </div>
+
+          <label class="ai-field ai-model-field" for="modelSelect">
+            <span>模型</span>
+            <select id="modelSelect" disabled>
+              <option value="">尚未载入模型</option>
+            </select>
+          </label>
+
+          <button
+            id="refreshModelsButton"
+            class="icon-button"
+            type="button"
+            title="刷新模型列表"
+            aria-label="刷新模型列表"
+          >
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 6v5h-5" />
+              <path d="M4 18v-5h5" />
+              <path d="M18.2 9A7 7 0 0 0 6.1 6.1L4 8" />
+              <path d="m5.8 15A7 7 0 0 0 17.9 17.9L20 16" />
+            </svg>
+          </button>
+
+          <label class="ai-field ai-strength-field" for="beautifyStrength">
+            <span>磨皮</span>
+            <div class="slider-wrap">
+              <input
+                id="beautifyStrength"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value="50"
+              />
+            </div>
+            <output id="beautifyStrengthValue" for="beautifyStrength">50</output>
+          </label>
+
+          <button id="beautifyButton" class="button button-ai" type="button" disabled>
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m12 3 1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3Z" />
+              <path d="m19 15 .9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z" />
+              <path d="m5 15 .7 1.8L7.5 18l-1.8.7L5 21l-.7-2.3L2.5 18l1.8-1.2L5 15Z" />
+            </svg>
+            <span>AI 美化</span>
+          </button>
+
+          <button
+            id="openAiResultButton"
+            class="button button-secondary button-compact"
+            type="button"
+            title="打开已保存的 AI 结果"
+            hidden
+          >
+            打开结果
+          </button>
+
+          <button
+            id="revealAiResultButton"
+            class="button button-secondary button-compact"
+            type="button"
+            title="在文件资源管理器中显示已保存的 AI 结果"
+            hidden
+          >
+            打开文件夹
+          </button>
+
+          <button id="comfySettingsButton" class="button button-secondary button-compact" type="button">
+            设置
+          </button>
+        </section>
+      </section>
+    </div>
+
+    <dialog id="comfyDialog" class="settings-dialog">
+      <form id="comfyForm" method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <h2>ComfyUI 设置</h2>
+            <p>指向包含 ComfyUI 与 python_embeded 的安装目录。</p>
+          </div>
+          <button id="closeComfyDialogButton" class="icon-button" type="button" aria-label="关闭">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12" />
+              <path d="m18 6-12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <label class="dialog-field" for="comfyRootInput">
+          <span>安装目录</span>
+          <input id="comfyRootInput" type="text" spellcheck="false" />
+        </label>
+
+        <label class="dialog-field dialog-port" for="comfyPortInput">
+          <span>服务端口</span>
+          <input id="comfyPortInput" type="number" min="1" max="65535" step="1" value="8188" />
+        </label>
+
+        <p id="comfyConfigMessage" class="dialog-message"></p>
+
+        <div class="dialog-actions">
+          <button id="cancelComfyDialogButton" class="button button-secondary" type="button">取消</button>
+          <button id="saveComfyConfigButton" class="button button-primary" type="submit">保存并检测</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="app.js?v=16" defer></script>
+  </body>
+</html>

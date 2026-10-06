@@ -1,0 +1,21 @@
+# AI 处理结果：由本机 ComfyUI 生成的大尺寸 PNG，可通过重新处理得到，不入库
+outputs/
+
+# 运行时与缓存
+*.log
+*.tmp
+__pycache__/
+node_modules/
+
+# 本地配置与密钥，避免误提交
+comfy.json
+.env
+.env.*
+*.pem
+*.key
+
+# 编辑器与系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
