@@ -10,6 +10,9 @@ outputs/
 __pycache__/
 node_modules/
 
+# 桌面版构建产物：安装包与解包目录体积很大，用 pnpm run dist 重新生成
+desktop/dist/
+
 # 本地配置与密钥，避免误提交
 comfy.json
 .env

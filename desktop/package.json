@@ -1,0 +1,74 @@
+{
+  "name": "color-adjust-app-desktop",
+  "productName": "ColorAdjustApp",
+  "version": "1.1.0",
+  "description": "整体校色桌面版：把网页版的前端原样装进一个 .exe，内置本地桥接服务，不需要额外开后端。",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron . --smoke",
+    "test": "node test/bridge.test.js",
+    "stamp": "node scripts/stamp-icon.js",
+    "dist": "electron-builder --win portable dir && node scripts/stamp-icon.js"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^25.1.8",
+    "rcedit": "^4.0.1"
+  },
+  "build": {
+    "appId": "com.humaneater.coloradjustapp",
+    "productName": "ColorAdjustApp",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "bridge.js",
+      "comfy.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "..",
+        "to": "app",
+        "filter": [
+          "index.html",
+          "app.js",
+          "styles.css",
+          "white-balance.js",
+          "geometry.js",
+          "curves.js",
+          "posterize.js",
+          "vendor/**/*",
+          "comfy/**/*",
+          "tools/**/*"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "ColorAdjustApp-${version}-portable.exe"
+    },
+    "compression": "maximum"
+  }
+}

@@ -798,6 +798,9 @@ test("VERSION、index.html 缓存参数、CHANGELOG 与 README 版本一致", ()
   const version = fs.readFileSync(path.join(root, "VERSION"), "utf8").trim();
   const changelog = fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
   const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
+  const desktopPackage = JSON.parse(
+    fs.readFileSync(path.join(root, "desktop", "package.json"), "utf8"),
+  );
 
   assert.match(version, /^\d+\.\d+\.\d+$/, `VERSION 内容不是语义化版本："${version}"`);
 
@@ -820,6 +823,11 @@ test("VERSION、index.html 缓存参数、CHANGELOG 与 README 版本一致", ()
     readme,
     new RegExp(`当前版本 \\*\\*v${version.replace(/\./g, "\\.")}\\*\\*`),
     "README.md 的版本行与 VERSION 不一致",
+  );
+  assert.equal(
+    desktopPackage.version,
+    version,
+    "desktop/package.json 的版本与 VERSION 不一致",
   );
 });
 

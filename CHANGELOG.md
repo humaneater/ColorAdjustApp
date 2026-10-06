@@ -1,8 +1,34 @@
 # 更新日志
 
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。`VERSION` 文件是唯一来源，
-`index.html` 里脚本的 `?v=` 缓存参数、本文件的最新条目、README 的版本行都跟它保持一致
-（`node tools/ui-consistency.test.js` 会校验）。
+`index.html` 里脚本的 `?v=` 缓存参数、`desktop/package.json` 的版本、本文件的最新条目、
+README 的版本行都跟它保持一致（`node tools/ui-consistency.test.js` 会校验）。
+
+## [1.1.0] - 2026-10-06
+
+在网页版之外增加桌面版（`.exe`），两个版本共用同一套前端文件。
+
+### 新增
+
+- **桌面版**：`desktop/` 下是一个 Electron 应用，双击 `ColorAdjustApp.exe` 即可使用，
+  不需要另开命令行窗口，也不会在后台常驻额外进程（关掉窗口就全部退出）；
+  同时提供单文件 `ColorAdjustApp-1.1.0-portable.exe` 与免安装目录版。
+- **界面与网页版完全一致**：`index.html`、`app.js`、`styles.css` 以及白平衡 / 几何 /
+  曲线 / 色调分离四个模块都是同一批文件，打包时直接引用，仓库里没有第二份副本。
+- **桥接层用 Node 重写**（`desktop/bridge.js` + `desktop/comfy.js`）：把 `serve.ps1` 的
+  `/api/comfy/*`、`/api/outputs/reveal` 与静态服务搬进进程内，接口契约、状态码与
+  错误文案逐条对齐，因此前端一行都不用改；顺带把请求处理从串行改成并发。
+- **AI 结果位置**：网页版在工程目录的 `outputs\`，桌面版在 `图片\ColorAdjustApp\`；
+  两者共用同一份 ComfyUI 配置 `%LOCALAPPDATA%\ColorAdjustApp\comfy.json`。
+- **桌面版自检**：`ColorAdjustApp.exe --smoke` 会加载 `tools/browser-check.html`，
+  跑完网页版那套端到端断言并打印 `RESULT n/n`；`--shot=<文件>` 可以截界面图。
+
+### 自测
+
+- Node 套件 137 项（白平衡 30 / 几何 33 / 曲线 20 / 色调分离 17 / 界面一致性 37）
+- 桌面桥接 34 项（自带 mock ComfyUI，跑完整任务流与全部错误文案）
+- 浏览器端到端 165 项 × WebGL2、WebGL1 两条渲染路径
+- 打包后的 exe 自检 165/165；另用真实 ComfyUI 跑通「上传 → 排队 → 执行 → 归档」全链路
 
 ## [1.0.0] - 2026-10-06
 

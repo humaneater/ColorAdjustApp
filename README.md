@@ -1,14 +1,18 @@
 # 整体校色
 
-一个在本机运行、无需安装前端依赖的图片校色与人像美化工具。
+一个在本机运行、无需安装前端依赖的图片校色与人像美化工具。提供**网页版**与**桌面版**
+（`.exe`）两种用法，界面、操作与校色逻辑完全相同。
 
-当前版本 **v1.0.0**，更新内容见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v1.1.0**，更新内容见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 使用
 
-双击 `start.cmd`。程序会启动本地服务并打开浏览器。建议使用 Chrome 或 Edge。
-RAW 解码与 16 位处理依赖 WebAssembly 多线程和 WebGL2，不能直接把
-`index.html` 拖进浏览器。
+**桌面版**：解压后双击 `ColorAdjustApp.exe`（单文件版 `ColorAdjustApp-1.1.0-portable.exe`
+直接双击即可）。不需要命令行，也不会在后台常驻额外进程，关掉窗口就全部退出。
+
+**网页版**：双击 `start.cmd`。程序会启动本地服务并打开浏览器。建议使用 Chrome 或 Edge。
+RAW 解码与 16 位处理依赖 WebAssembly 多线程和 WebGL2，不能直接把 `index.html`
+拖进浏览器。
 
 支持拖入、点击选择或粘贴图片，包括：
 
@@ -195,12 +199,34 @@ AI 美化始终使用未旋转裁切的整幅画面，显示和导出时再套�
 
 没有 ComfyUI 或缺少依赖时，RAW 校色、降噪和普通导出仍可正常使用，只会
 禁用“AI 美化”。AI 输入是当前校色和降噪后的 PNG，处理结果先显示在右侧
-预览，并永久保存到本工程 `outputs` 文件夹；调整滑条、切换模型或载入新
+预览，并永久保存到本工程 `outputs` 文件夹（桌面版保存到 `图片\ColorAdjustApp\`）；
+调整滑条、切换模型或载入新
 图片会丢弃右侧旧 AI 结果，但不会清除滑条设置，也不会替换左侧原图。
 保存成功后状态栏会显示完整路径，“打开结果”在浏览器里查看图片，
 “打开文件夹”会在资源管理器中选中该文件；这两个按钮在调整滑条后仍然
 可用，方便随时找回结果。文件名取自输入图片，例如 `IMG_0001-AI.png`，
 重名时自动追加 `-2`、`-3`。
+
+## 桌面版（.exe）
+
+![桌面版](docs/desktop.png)
+
+桌面版把网页版的前端原样装进 Electron 窗口，并内置了原 `serve.ps1` 提供的本地接口，
+所以**排版、操作、快捷键、AI 面板都完全一致**，区别只在启动方式与结果落盘位置：
+
+| 项 | 网页版 | 桌面版 |
+|---|---|---|
+| 启动 | 双击 `start.cmd`（PowerShell 服务 + 浏览器） | 双击 `ColorAdjustApp.exe` |
+| 后台 | 需要保持命令行窗口开着 | 无需额外进程，关窗即退出 |
+| 界面文件 | `index.html`、`app.js`、各模块 | 同一批文件（仓库里没有第二份副本） |
+| AI 结果 | 工程目录 `outputs\` | `图片\ColorAdjustApp\` |
+| ComfyUI 配置 | `%LOCALAPPDATA%\ColorAdjustApp\comfy.json` | 同一个文件，两个版本共用 |
+| 自检 | `tools/browser-check.html`（浏览器打开） | `ColorAdjustApp.exe --smoke` |
+
+桌面版的实现放在 `desktop/`：`main.js` 是 Electron 主进程，`bridge.js` 提供静态文件与
+`/api/` 路由，`comfy.js` 负责 ComfyUI 的配置、启停、上传、轮询与结果归档，
+三者的接口契约与 `serve.ps1` 逐条对齐（错误文案也一致，前端的提示不会变）。
+细节与构建方式见 [desktop/README.md](desktop/README.md)。
 
 ## 操作
 
@@ -223,11 +249,19 @@ node tools/white-balance.test.js    # 白平衡色彩数学（轨迹、色适应
 node tools/geometry.test.js         # 旋转裁切几何（视图矩阵、外接矩形、自动去掉空白）
 node tools/curves.test.js           # 曲线数学（贝塞尔、单调性、查找表、直方图）
 node tools/posterize.test.js        # 色调分离数学（分级、状态解析、预览条）
-node tools/ui-consistency.test.js   # 界面接线、下拉项与色彩模块的一致性
+node tools/ui-consistency.test.js   # 界面接线、下拉项、色彩模块与版本号的一致性
 node tools/wb-diagnostic.js         # 打印各色温下的 3x3 矩阵，便于核对数值
+node desktop/test/bridge.test.js    # 桌面版桥接层（自带 mock ComfyUI 跑完整任务流）
 ```
 
 启动服务后可用无头浏览器打开 `http://127.0.0.1:8765/tools/browser-check.html`，
 它会逐项切换白平衡方式并读取 WebGL 结果像素做断言。
+
+桌面版的构建与打包后自检见 [desktop/README.md](desktop/README.md)；打包好的 exe 也可以
+直接自检：
+
+```powershell
+.\desktop\dist\win-unpacked\ColorAdjustApp.exe --smoke   # 打印 RESULT n/n
+```
 
 关闭启动程序的命令行窗口即可停止本地服务。

@@ -1,0 +1,4 @@
+# pnpm 11 的构建设置：electron 需要跑安装脚本才能下载对应平台的二进制
+allowBuilds:
+  electron: true
+  electron-builder: true
