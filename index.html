@@ -50,6 +50,24 @@
           <span id="processedLabel" class="panel-label panel-label-accent">实时校色</span>
           <canvas id="processedCanvas" class="preview-canvas" hidden></canvas>
           <canvas id="aiCanvas" class="preview-canvas ai-canvas" hidden></canvas>
+
+          <div id="cropOverlay" class="crop-overlay" hidden>
+            <span class="crop-shade" data-side="top"></span>
+            <span class="crop-shade" data-side="right"></span>
+            <span class="crop-shade" data-side="bottom"></span>
+            <span class="crop-shade" data-side="left"></span>
+            <div id="cropBox" class="crop-box" data-handle="move">
+              <span class="crop-grid" aria-hidden="true"></span>
+              <span class="crop-handle" data-handle="nw"></span>
+              <span class="crop-handle" data-handle="n"></span>
+              <span class="crop-handle" data-handle="ne"></span>
+              <span class="crop-handle" data-handle="e"></span>
+              <span class="crop-handle" data-handle="se"></span>
+              <span class="crop-handle" data-handle="s"></span>
+              <span class="crop-handle" data-handle="sw"></span>
+              <span class="crop-handle" data-handle="w"></span>
+            </div>
+          </div>
         </section>
 
         <button id="dropLayer" class="drop-layer" type="button" aria-label="选择或拖入图片">
@@ -71,113 +89,454 @@
           accept="image/*,.3fr,.arw,.bay,.cap,.cr2,.cr3,.crw,.cs1,.dc2,.dcr,.dcs,.dng,.drf,.eip,.erf,.fff,.fjs,.gpr,.iiq,.kdc,.mdc,.mef,.mos,.mrw,.nef,.nrw,.orf,.pef,.pxn,.qtk,.raf,.raw,.rw2,.rwl,.rwz,.sr2,.srf,.srw,.sti,.x3f"
           hidden
         />
+
+        <div id="geometryBar" class="geometry-bar" hidden>
+          <div class="geometry-group">
+            <span class="geometry-label">旋转</span>
+            <button
+              id="rotateLeftButton"
+              class="icon-button"
+              type="button"
+              title="向左旋转 90°"
+              aria-label="向左旋转 90 度"
+            >
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M9 14 4 9l5-5" />
+                <path d="M4 9h10a6 6 0 0 1 0 12H8" />
+              </svg>
+            </button>
+            <button
+              id="rotateRightButton"
+              class="icon-button"
+              type="button"
+              title="向右旋转 90°"
+              aria-label="向右旋转 90 度"
+            >
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m15 14 5-5-5-5" />
+                <path d="M20 9H10a6 6 0 0 0 0 12h6" />
+              </svg>
+            </button>
+            <button
+              id="flipHorizontalButton"
+              class="icon-button"
+              type="button"
+              title="水平翻转（左右镜像）"
+              aria-label="水平翻转"
+            >
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v18" />
+                <path d="M9 7 3 12l6 5z" />
+                <path d="m15 7 6 5-6 5z" />
+              </svg>
+            </button>
+            <button
+              id="flipVerticalButton"
+              class="icon-button"
+              type="button"
+              title="垂直翻转（上下镜像）"
+              aria-label="垂直翻转"
+            >
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 12h18" />
+                <path d="M7 9 12 3l5 6z" />
+                <path d="m7 15 5 6 5-6z" />
+              </svg>
+            </button>
+            <label class="geometry-angle" for="rotationAngle">
+              <span>角度</span>
+              <div class="slider-wrap">
+                <input
+                  id="rotationAngle"
+                  type="range"
+                  min="-45"
+                  max="45"
+                  step="0.1"
+                  value="0"
+                />
+                <span class="center-mark" aria-hidden="true"></span>
+              </div>
+              <input
+                id="rotationAngleNumber"
+                class="number-input"
+                type="number"
+                min="-45"
+                max="45"
+                step="0.1"
+                aria-label="旋转角度"
+              />
+              <span class="geometry-unit">°</span>
+            </label>
+          </div>
+
+          <div class="geometry-group geometry-group-crop">
+            <button
+              id="cropButton"
+              class="button button-secondary button-compact"
+              type="button"
+              aria-pressed="false"
+            >
+              裁切
+            </button>
+
+            <div id="cropControls" class="geometry-crop-controls" hidden>
+              <label class="geometry-aspect" for="cropAspect">
+                <span>比例</span>
+                <select id="cropAspect">
+                  <option value="free">自由</option>
+                  <option value="original">原始比例</option>
+                  <option value="1:1">1:1</option>
+                  <option value="4:3">4:3</option>
+                  <option value="3:2">3:2</option>
+                  <option value="16:9">16:9</option>
+                  <option value="3:4">3:4</option>
+                  <option value="2:3">2:3</option>
+                  <option value="9:16">9:16</option>
+                </select>
+              </label>
+              <button
+                id="cropAutoButton"
+                class="button button-secondary button-compact"
+                type="button"
+                title="把裁切框收成画面里最大的矩形，去掉旋转留下的空白角"
+              >
+                去掉空白
+              </button>
+              <button id="cropApplyButton" class="button button-primary button-compact" type="button">
+                应用
+              </button>
+              <button id="cropCancelButton" class="button button-secondary button-compact" type="button">
+                取消
+              </button>
+            </div>
+
+            <output id="geometryReadout" class="geometry-readout">未调整</output>
+
+            <button
+              id="resetGeometryButton"
+              class="button button-secondary button-compact"
+              type="button"
+              title="还原旋转、翻转与裁切"
+            >
+              还原
+            </button>
+          </div>
+        </div>
       </main>
 
+      <div
+        id="panelSplitter"
+        class="panel-splitter"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="拖动调整参数面板高度"
+        tabindex="0"
+        title="上下拖动调整参数面板高度，双击恢复自适应"
+      >
+        <span class="panel-splitter-grip" aria-hidden="true"></span>
+      </div>
+
       <section class="controls" aria-label="色彩调整">
-        <fieldset id="controlsFieldset" class="controls-fieldset" disabled>
-          <div class="control-grid">
-            <div class="control-row" data-key="saturation">
-              <label for="saturation">饱和度</label>
-              <div class="slider-wrap">
-                <input id="saturation" type="range" min="-100" max="100" step="1" value="0" />
-                <span class="center-mark" aria-hidden="true"></span>
-              </div>
-              <output id="saturationValue" for="saturation">0</output>
-            </div>
+                <fieldset id="controlsFieldset" class="controls-fieldset" disabled>
+          <div class="control-groups">
+            <section class="control-group">
+              <h3 class="control-group-title">基础</h3>
+              <div class="control-grid">
+                <div class="control-row" data-key="exposure">
+                  <label for="exposure">曝光</label>
+                  <div class="slider-wrap">
+                    <input id="exposure" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input id="exposureNumber" class="number-input" type="number" aria-label="曝光数值" />
+                </div>
 
-            <div class="control-row" data-key="hueShift">
-              <label for="hueShift">色相偏移</label>
-              <div class="slider-wrap">
-                <input id="hueShift" type="range" min="-100" max="100" step="1" value="0" />
-                <span class="center-mark" aria-hidden="true"></span>
-              </div>
-              <output id="hueShiftValue" for="hueShift">0</output>
-            </div>
+                <div class="control-row" data-key="brightness">
+                  <label for="brightness">亮度</label>
+                  <div class="slider-wrap">
+                    <input id="brightness" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input id="brightnessNumber" class="number-input" type="number" aria-label="亮度数值" />
+                </div>
 
-            <div class="control-row" data-key="vibrance">
-              <label for="vibrance">自然饱和度</label>
-              <div class="slider-wrap">
-                <input id="vibrance" type="range" min="-100" max="100" step="1" value="0" />
-                <span class="center-mark" aria-hidden="true"></span>
-              </div>
-              <output id="vibranceValue" for="vibrance">0</output>
-            </div>
+                <div class="control-row" data-key="saturation">
+                  <label for="saturation">饱和度</label>
+                  <div class="slider-wrap">
+                    <input id="saturation" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input id="saturationNumber" class="number-input" type="number" aria-label="饱和度数值" />
+                </div>
 
-            <div class="control-row" data-key="brightness">
-              <label for="brightness">亮度</label>
-              <div class="slider-wrap">
-                <input id="brightness" type="range" min="-100" max="100" step="1" value="0" />
-                <span class="center-mark" aria-hidden="true"></span>
-              </div>
-              <output id="brightnessValue" for="brightness">0</output>
-            </div>
+                <div class="control-row" data-key="vibrance">
+                  <label for="vibrance">自然饱和度</label>
+                  <div class="slider-wrap">
+                    <input id="vibrance" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input id="vibranceNumber" class="number-input" type="number" aria-label="自然饱和度数值" />
+                </div>
 
-            <div class="control-row" data-key="exposure">
-              <label for="exposure">曝光</label>
-              <div class="slider-wrap">
-                <input id="exposure" type="range" min="-100" max="100" step="1" value="0" />
-                <span class="center-mark" aria-hidden="true"></span>
+                <div class="control-row" data-key="contrast">
+                  <label for="contrast">对比度</label>
+                  <div class="slider-wrap">
+                    <input id="contrast" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input id="contrastNumber" class="number-input" type="number" aria-label="对比度数值" />
+                </div>
               </div>
-              <output id="exposureValue" for="exposure">0</output>
-            </div>
+            </section>
 
-            <div class="control-row" data-key="contrast">
-              <label for="contrast">对比度</label>
-              <div class="slider-wrap">
-                <input id="contrast" type="range" min="-100" max="100" step="1" value="0" />
-                <span class="center-mark" aria-hidden="true"></span>
-              </div>
-              <output id="contrastValue" for="contrast">0</output>
-            </div>
+            <section class="control-group">
+              <h3 class="control-group-title">白平衡</h3>
+              <div class="control-grid">
+                <div class="control-row" data-key="whiteBalanceMode">
+                  <label for="whiteBalanceMode">白平衡方式</label>
+                  <div class="select-wrap">
+                    <select id="whiteBalanceMode">
+                      <option value="manual">手动双轴（暖冷 / 绿品红）</option>
+                      <option value="kelvin">色温 + 色调（开尔文）</option>
+                      <option value="preset">场景预设（日光 / 阴天 / 白炽灯…）</option>
+                      <option value="auto">自动分析（灰度世界等）</option>
+                      <option value="grayPoint">灰点拾色（点击中性区域）</option>
+                      <option value="gains">RGB 通道增益（相机倍率）</option>
+                      <option value="off">关闭白平衡</option>
+                    </select>
+                  </div>
+                  <output id="whiteBalanceModeValue" for="whiteBalanceMode">手动双轴</output>
+                </div>
 
-            <div class="control-row" data-key="temperature">
-              <label for="temperature">色温</label>
-              <div class="slider-wrap">
-                <input id="temperature" type="range" min="-100" max="100" step="1" value="0" />
-                <span class="center-mark" aria-hidden="true"></span>
-              </div>
-              <output id="temperatureValue" for="temperature">0</output>
-            </div>
+                <div class="control-row" data-key="temperature" data-wb-mode="manual">
+                  <label for="temperature">色温</label>
+                  <div class="slider-wrap">
+                    <input id="temperature" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input id="temperatureNumber" class="number-input" type="number" aria-label="色温数值" />
+                </div>
 
-            <div class="control-row" data-key="whiteBalance">
-              <label for="whiteBalance">白平衡</label>
-              <div class="slider-wrap">
-                <input id="whiteBalance" type="range" min="-100" max="100" step="1" value="0" />
-                <span class="center-mark" aria-hidden="true"></span>
-              </div>
-              <output id="whiteBalanceValue" for="whiteBalance">0</output>
-            </div>
+                <div class="control-row" data-key="whiteBalance" data-wb-mode="manual">
+                  <label for="whiteBalance">白平衡</label>
+                  <div class="slider-wrap">
+                    <input id="whiteBalance" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input id="whiteBalanceNumber" class="number-input" type="number" aria-label="白平衡数值" />
+                </div>
 
-            <div class="control-row" data-key="shadows">
-              <label for="shadows">阴影强度</label>
-              <div class="slider-wrap">
-                <input id="shadows" type="range" min="-100" max="100" step="1" value="0" />
-                <span class="center-mark" aria-hidden="true"></span>
-              </div>
-              <output id="shadowsValue" for="shadows">0</output>
-            </div>
+                <div class="control-row" data-key="wbKelvin" data-wb-mode="kelvin preset">
+                  <label for="wbKelvin">色温 K</label>
+                  <div class="slider-wrap">
+                    <input
+                      id="wbKelvin"
+                      type="range"
+                      min="2000"
+                      max="12000"
+                      step="50"
+                      value="6500"
+                    />
+                  </div>
+                  <input id="wbKelvinNumber" class="number-input" type="number" aria-label="色温 K 数值" />
+                </div>
 
-            <div class="control-row" data-key="denoise">
-              <label for="denoise">降噪</label>
-              <div class="slider-wrap">
-                <input id="denoise" type="range" min="0" max="100" step="1" value="0" />
-              </div>
-              <output id="denoiseValue" for="denoise">0</output>
-            </div>
+                <div class="control-row" data-key="wbTint" data-wb-mode="kelvin preset">
+                  <label for="wbTint">色调</label>
+                  <div class="slider-wrap">
+                    <input id="wbTint" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input id="wbTintNumber" class="number-input" type="number" aria-label="色调数值" />
+                </div>
 
-            <div class="control-row" data-key="detail">
-              <label for="detail">细节保留</label>
-              <div class="slider-wrap">
-                <input id="detail" type="range" min="0" max="100" step="1" value="0" />
+                <div class="control-row" data-key="wbPreset" data-wb-mode="preset">
+                  <label for="wbPreset">场景预设</label>
+                  <div class="select-wrap">
+                    <select id="wbPreset">
+                      <option value="custom">自定义</option>
+                      <option value="candle">烛光 / 日出 1900K</option>
+                      <option value="incandescent">白炽灯 2856K</option>
+                      <option value="fluorescentWarm">暖白荧光灯 3000K</option>
+                      <option value="tungstenStudio">影室灯 3200K</option>
+                      <option value="fluorescentCool">冷白荧光灯 4200K</option>
+                      <option value="daylight" selected>日光 5200K</option>
+                      <option value="flash">电子闪光灯 5500K</option>
+                      <option value="cloudy">阴天 6000K</option>
+                      <option value="daylightFluorescent">日光荧光灯 6500K</option>
+                      <option value="shade">阴影 7000K</option>
+                      <option value="blueSky">蓝天 / 雪地 10000K</option>
+                    </select>
+                  </div>
+                  <output id="wbPresetValue" for="wbPreset">日光</output>
+                </div>
+
+                <div class="control-row" data-key="wbAlgorithm" data-wb-mode="auto">
+                  <label for="wbAlgorithm">自动算法</label>
+                  <div class="select-wrap">
+                    <select id="wbAlgorithm">
+                      <option value="grayWorld">灰度世界</option>
+                      <option value="shadesOfGray">Shades of Gray (p=6)</option>
+                      <option value="whitePatch">白点 / Max-RGB</option>
+                      <option value="percentileWhite">白点分位数 97%</option>
+                      <option value="grayEdge">灰度边缘</option>
+                    </select>
+                  </div>
+                  <output id="wbAlgorithmValue" for="wbAlgorithm">灰度世界</output>
+                </div>
+
+                <div class="control-row" data-key="wbStrength" data-wb-mode="auto grayPoint">
+                  <label for="wbStrength">白平衡强度</label>
+                  <div class="slider-wrap">
+                    <input id="wbStrength" type="range" min="0" max="100" step="1" value="100" />
+                  </div>
+                  <input id="wbStrengthNumber" class="number-input" type="number" aria-label="白平衡强度数值" />
+                </div>
+
+                <div class="control-row control-row-hint" data-wb-mode="grayPoint">
+                  <label>操作</label>
+                  <p id="wbGrayPointHint" class="control-hint">
+                    在左侧原图上点击中性灰或白色区域即可取色，可反复点击
+                  </p>
+                  <output id="wbGrayPointValue">未取色</output>
+                </div>
+
+                <div class="control-row" data-key="wbGainR" data-wb-mode="gains">
+                  <label for="wbGainR">红增益</label>
+                  <div class="slider-wrap">
+                    <input id="wbGainR" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input id="wbGainRNumber" class="number-input" type="number" aria-label="红增益倍率" />
+                </div>
+
+                <div class="control-row" data-key="wbGainG" data-wb-mode="gains">
+                  <label for="wbGainG">绿增益</label>
+                  <div class="slider-wrap">
+                    <input id="wbGainG" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input id="wbGainGNumber" class="number-input" type="number" aria-label="绿增益倍率" />
+                </div>
+
+                <div class="control-row" data-key="wbGainB" data-wb-mode="gains">
+                  <label for="wbGainB">蓝增益</label>
+                  <div class="slider-wrap">
+                    <input id="wbGainB" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input id="wbGainBNumber" class="number-input" type="number" aria-label="蓝增益倍率" />
+                </div>
               </div>
-              <output id="detailValue" for="detail">0</output>
-            </div>
+            </section>
+
+            <section class="control-group">
+              <h3 class="control-group-title">影调与风格</h3>
+              <div class="control-grid">
+                <div class="control-row" data-key="shadows">
+                  <label for="shadows">阴影强度</label>
+                  <div class="slider-wrap">
+                    <input id="shadows" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input id="shadowsNumber" class="number-input" type="number" aria-label="阴影强度数值" />
+                </div>
+
+                <div class="control-row" data-key="highlights">
+                  <label for="highlights">高光强度</label>
+                  <div class="slider-wrap">
+                    <input id="highlights" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input
+                    id="highlightsNumber"
+                    class="number-input"
+                    type="number"
+                    aria-label="高光强度数值"
+                  />
+                </div>
+
+                <div class="control-row" data-key="hueShift">
+                  <label for="hueShift">色相偏移</label>
+                  <div class="slider-wrap">
+                    <input id="hueShift" type="range" min="-100" max="100" step="1" value="0" />
+                    <span class="center-mark" aria-hidden="true"></span>
+                  </div>
+                  <input id="hueShiftNumber" class="number-input" type="number" aria-label="色相偏移数值" />
+                </div>
+
+                <div class="control-row control-row-action">
+                  <span class="control-label">色调分离</span>
+                  <div class="control-action-body">
+                    <label class="control-switch" title="开启 / 关闭色调分离，方便和原图对比">
+                      <input id="posterizeEnabled" type="checkbox" />
+                      <span class="control-switch-box" aria-hidden="true">
+                        <svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7" /></svg>
+                      </span>
+                      <span class="control-switch-text">开启</span>
+                    </label>
+                    <button
+                      id="posterizeButton"
+                      class="button button-secondary control-button"
+                      type="button"
+                      disabled
+                    >
+                      打开窗口
+                    </button>
+                  </div>
+                  <output id="posterizeRowValue" class="control-row-value">关</output>
+                </div>
+
+                <div class="control-row control-row-action">
+                  <span class="control-label">曲线</span>
+                  <div class="control-action-body">
+                    <label class="control-switch" title="开启 / 关闭曲线，方便和原图对比">
+                      <input id="curvesEnabled" type="checkbox" />
+                      <span class="control-switch-box" aria-hidden="true">
+                        <svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7" /></svg>
+                      </span>
+                      <span class="control-switch-text">开启</span>
+                    </label>
+                    <button
+                      id="curveButton"
+                      class="button button-secondary control-button"
+                      type="button"
+                      disabled
+                    >
+                      打开窗口
+                    </button>
+                  </div>
+                  <output id="curveRowValue" class="control-row-value">未调整</output>
+                </div>
+              </div>
+            </section>
+
+            <section class="control-group">
+              <h3 class="control-group-title">降噪与细节</h3>
+              <div class="control-grid">
+                <div class="control-row" data-key="denoise">
+                  <label for="denoise">降噪</label>
+                  <div class="slider-wrap">
+                    <input id="denoise" type="range" min="0" max="100" step="1" value="0" />
+                  </div>
+                  <input id="denoiseNumber" class="number-input" type="number" aria-label="降噪数值" />
+                </div>
+
+                <div class="control-row" data-key="detail">
+                  <label for="detail">细节保留</label>
+                  <div class="slider-wrap">
+                    <input id="detail" type="range" min="0" max="100" step="1" value="0" />
+                  </div>
+                  <input id="detailNumber" class="number-input" type="number" aria-label="细节保留数值" />
+                </div>
+              </div>
+            </section>
           </div>
         </fieldset>
 
-        <section id="aiPanel" class="ai-panel" aria-label="人像美化">
+        <section id="aiPanel" class="ai-panel" aria-label="AI 人像美化">
           <div class="ai-panel-heading">
-            <strong>人像美化</strong>
+            <strong>AI 人像美化</strong>
             <span id="aiStatus" role="status">正在检测 ComfyUI...</span>
           </div>
 
@@ -215,7 +574,12 @@
                 value="50"
               />
             </div>
-            <output id="beautifyStrengthValue" for="beautifyStrength">50</output>
+            <input
+              id="beautifyStrengthNumber"
+              class="number-input"
+              type="number"
+              aria-label="磨皮数值"
+            />
           </label>
 
           <button id="beautifyButton" class="button button-ai" type="button" disabled>
@@ -288,8 +652,127 @@
       </form>
     </dialog>
 
+    <dialog id="curveDialog" class="curve-dialog" aria-label="曲线">
+      <div class="curve-head">
+        <div class="curve-head-copy">
+          <h2>曲线</h2>
+          <p>双击新建关键点 · 拖动控制柄调整斜率 · 选中后按 Del 删除</p>
+        </div>
+        <button id="closeCurveDialogButton" class="icon-button" type="button" aria-label="关闭曲线窗口">
+          <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m6 6 12 12" />
+            <path d="m18 6-12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="curve-channels" role="group" aria-label="曲线通道">
+        <button class="curve-channel is-active" type="button" data-channel="rgb" aria-pressed="true">
+          RGB
+        </button>
+        <button class="curve-channel" type="button" data-channel="r" aria-pressed="false">红</button>
+        <button class="curve-channel" type="button" data-channel="g" aria-pressed="false">绿</button>
+        <button class="curve-channel" type="button" data-channel="b" aria-pressed="false">蓝</button>
+      </div>
+
+      <canvas
+        id="curveCanvas"
+        class="curve-canvas"
+        width="300"
+        height="300"
+        tabindex="0"
+        aria-label="曲线编辑区"
+      ></canvas>
+
+      <div class="curve-foot">
+        <output id="curvePointValue" class="curve-point-value">未选中关键点</output>
+        <button id="resetCurveButton" class="button button-secondary button-compact" type="button">
+          重置
+        </button>
+      </div>
+    </dialog>
+
+    <dialog id="posterizeDialog" class="posterize-dialog" aria-label="色调分离">
+      <div class="curve-head">
+        <div class="curve-head-copy">
+          <h2>色调分离</h2>
+          <p>把连续的明暗压成若干段平涂色块</p>
+        </div>
+        <button
+          id="closePosterizeDialogButton"
+          class="icon-button"
+          type="button"
+          aria-label="关闭色调分离窗口"
+        >
+          <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m6 6 12 12" />
+            <path d="m18 6-12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <canvas
+        id="posterizePreview"
+        class="posterize-preview"
+        width="304"
+        height="48"
+        aria-label="分级预览"
+      ></canvas>
+
+      <label class="posterize-field posterize-mode-field" for="posterizeMode">
+        <span>模式</span>
+        <select id="posterizeMode">
+          <option value="luma">按亮度（保留色彩）</option>
+          <option value="channels">按通道（R/G/B 各自）</option>
+        </select>
+      </label>
+
+      <div class="posterize-field posterize-slider" data-key="posterizeLevels">
+        <span>级数</span>
+        <div class="slider-wrap">
+          <input id="posterizeLevels" type="range" min="2" max="32" step="1" value="8" />
+        </div>
+        <input id="posterizeLevelsNumber" class="number-input" type="number" aria-label="级数数值" />
+      </div>
+
+      <div class="posterize-field posterize-slider" data-key="posterizeAmount">
+        <span>强度</span>
+        <div class="slider-wrap">
+          <input id="posterizeAmount" type="range" min="0" max="100" step="1" value="0" />
+        </div>
+        <input id="posterizeAmountNumber" class="number-input" type="number" aria-label="强度数值" />
+      </div>
+
+      <div id="posterizeChannelRow" class="posterize-field posterize-channels">
+        <span>通道</span>
+        <div class="posterize-channel-group" role="group" aria-label="参与分离的通道">
+          <button class="posterize-channel is-active" type="button" data-channel="r" aria-pressed="true">
+            R
+          </button>
+          <button class="posterize-channel is-active" type="button" data-channel="g" aria-pressed="true">
+            G
+          </button>
+          <button class="posterize-channel is-active" type="button" data-channel="b" aria-pressed="true">
+            B
+          </button>
+        </div>
+        <output id="posterizeChannelValue"></output>
+      </div>
+
+      <div class="curve-foot">
+        <output id="posterizeSummary" class="curve-point-value">强度 0，不生效</output>
+        <button id="resetPosterizeButton" class="button button-secondary button-compact" type="button">
+          重置
+        </button>
+      </div>
+    </dialog>
+
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-    <script src="app.js?v=16" defer></script>
+    <script src="white-balance.js?v=1.0.0" defer></script>
+    <script src="geometry.js?v=1.0.0" defer></script>
+    <script src="curves.js?v=1.0.0" defer></script>
+    <script src="posterize.js?v=1.0.0" defer></script>
+    <script src="app.js?v=1.0.0" defer></script>
   </body>
 </html>

@@ -1,0 +1,2286 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>RUNNING</title>
+    <style>
+      #report {
+        position: fixed;
+        z-index: 999;
+        inset: auto 0 0 0;
+        max-height: 42vh;
+        margin: 0;
+        padding: 8px;
+        overflow: auto;
+        color: #9cf7c0;
+        background: rgba(0, 0, 0, 0.92);
+        font: 11px/1.45 Consolas, monospace;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <pre id="report">running…</pre>
+    <script>
+      /*
+       * 浏览器端冒烟测试：把 index.html 的界面注入本页，按真实脚本顺序加载
+       * white-balance.js 与 app.js，然后逐个切换白平衡方式，读取 WebGL 结果像素做断言。
+       * 用法：先运行 serve.ps1，再用无头浏览器打开 /tools/browser-check.html
+       */
+      "use strict";
+
+      /*
+       * 无头浏览器不会持续产生合成帧，requestAnimationFrame 只会触发几次，
+       * 而 app.js 用 rAF 安排渲染。这里把它替换成等价的定时器实现，
+       * 让被测代码在无头环境下也能正常刷新（WebGL 渲染本身仍然是真实的）。
+       */
+      window.requestAnimationFrame = (callback) =>
+        window.setTimeout(() => callback(performance.now()), 16);
+      window.cancelAnimationFrame = (handle) => window.clearTimeout(handle);
+
+      /*
+       * ?gl=1 屏蔽 WebGL2，用来验证 GLSL ES 1.00 的回退着色器路径
+       * （app.js 对普通图片支持 WebGL1 回退）。
+       */
+      const forceWebgl1 = new URLSearchParams(window.location.search).get("gl") === "1";
+
+      if (forceWebgl1) {
+        const originalGetContext = HTMLCanvasElement.prototype.getContext;
+
+        HTMLCanvasElement.prototype.getContext = function (type, ...rest) {
+          if (type === "webgl2") {
+            return null;
+          }
+
+          return originalGetContext.call(this, type, ...rest);
+        };
+      }
+
+      const results = [];
+      const errors = [];
+
+      window.addEventListener("error", (event) => {
+        errors.push(String(event.message));
+      });
+      window.addEventListener("unhandledrejection", (event) => {
+        errors.push("unhandledrejection: " + String(event.reason));
+      });
+
+      function check(name, condition, detail) {
+        results.push({
+          name,
+          ok: Boolean(condition),
+          detail: detail === undefined ? "" : String(detail),
+        });
+      }
+
+      function near(actual, expected, tolerance) {
+        return Math.abs(actual - expected) <= tolerance;
+      }
+
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      async function frames(count) {
+        for (let index = 0; index < count; index += 1) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+
+        await sleep(40);
+      }
+
+      async function waitFor(predicate, label, attempts = 300) {
+        for (let index = 0; index < attempts; index += 1) {
+          if (predicate()) {
+            return true;
+          }
+
+          await sleep(30);
+        }
+
+        check("等待条件：" + label, false, "超时");
+        return false;
+      }
+
+      function loadScript(source) {
+        return new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+
+          script.src = source;
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error("无法加载 " + source));
+          document.head.append(script);
+        });
+      }
+
+      /** 造一张「中性灰阶梯 + 色块 + 灰卡」且整体偏暖的测试图。 */
+      function buildTestImage() {
+        const canvas = document.createElement("canvas");
+
+        canvas.width = 320;
+        canvas.height = 200;
+        const context = canvas.getContext("2d");
+        const cast = [1.15, 0.98, 0.7];
+        const apply = (r, g, b) =>
+          `rgb(${Math.round(r * cast[0])},${Math.round(g * cast[1])},${Math.round(b * cast[2])})`;
+        const steps = [24, 50, 76, 102, 128, 154, 180, 206];
+
+        steps.forEach((value, index) => {
+          context.fillStyle = apply(value, value, value);
+          context.fillRect(index * 40, 0, 40, 120);
+        });
+
+        context.fillStyle = apply(200, 60, 60);
+        context.fillRect(0, 120, 80, 80);
+        context.fillStyle = apply(60, 190, 80);
+        context.fillRect(80, 120, 80, 80);
+        context.fillStyle = apply(70, 90, 200);
+        context.fillRect(160, 120, 80, 80);
+        // 灰卡：灰点拾色会点在这里
+        context.fillStyle = apply(180, 180, 180);
+        context.fillRect(240, 120, 80, 80);
+
+        return canvas;
+      }
+
+      /** 读出画布上某块区域的平均 RGB（0-255）。 */
+      function readRegion(canvas, x, y, width, height) {
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        const data = context.getImageData(x, y, width, height).data;
+        const sums = [0, 0, 0];
+        const count = width * height;
+
+        for (let index = 0; index < count; index += 1) {
+          sums[0] += data[index * 4];
+          sums[1] += data[index * 4 + 1];
+          sums[2] += data[index * 4 + 2];
+        }
+
+        return sums.map((value) => value / count);
+      }
+
+      function readWhole(canvas) {
+        return readRegion(canvas, 0, 0, canvas.width, canvas.height);
+      }
+
+      function setSelect(id, value) {
+        const select = document.querySelector("#" + id);
+
+        select.value = value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+
+      function setSlider(id, value) {
+        const input = document.querySelector("#" + id);
+
+        input.value = String(value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+
+      function clickCanvasPixel(canvas, x, y) {
+        const rect = canvas.getBoundingClientRect();
+        const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+        const offsetX = (rect.width - canvas.width * scale) / 2;
+        const offsetY = (rect.height - canvas.height * scale) / 2;
+
+        canvas.dispatchEvent(
+          new MouseEvent("click", {
+            bubbles: true,
+            clientX: rect.left + offsetX + (x + 0.5) * scale,
+            clientY: rect.top + offsetY + (y + 0.5) * scale,
+          }),
+        );
+      }
+
+      function visibleRows() {
+        return Array.from(document.querySelectorAll("[data-key][data-wb-mode]"))
+          .filter((row) => !row.hidden)
+          .map((row) => row.dataset.key);
+      }
+
+      /* ------------------------- 曲线辅助函数 ------------------------- */
+
+      const CURVE_PAD = 10;
+
+      /** 曲线归一化坐标 → 画布上的客户端坐标（与 app.js 的映射保持一致）。 */
+      function curveClientPoint(x, y) {
+        const canvas = document.querySelector("#curveCanvas");
+        const rect = canvas.getBoundingClientRect();
+        const size = canvas.clientWidth || rect.width;
+        const plot = size - CURVE_PAD * 2;
+
+        return {
+          clientX: rect.left + canvas.clientLeft + CURVE_PAD + x * plot,
+          clientY: rect.top + canvas.clientTop + CURVE_PAD + (1 - y) * plot,
+        };
+      }
+
+      function dispatchCurveDoubleClick(point) {
+        document
+          .querySelector("#curveCanvas")
+          .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, ...point }));
+      }
+
+      function dispatchCurveDrag(from, to) {
+        const canvas = document.querySelector("#curveCanvas");
+        const base = {
+          bubbles: true,
+          pointerId: 1,
+          pointerType: "mouse",
+          isPrimary: true,
+        };
+
+        canvas.dispatchEvent(new PointerEvent("pointerdown", { ...base, ...from, buttons: 1 }));
+        canvas.dispatchEvent(new PointerEvent("pointermove", { ...base, ...to, buttons: 1 }));
+        canvas.dispatchEvent(new PointerEvent("pointerup", { ...base, ...to, buttons: 0 }));
+      }
+
+      function dispatchCurveKey(key) {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      }
+
+      /* ---------------------- 数字输入框与面板缩放 ---------------------- */
+
+      /** 在数字框里键入数值，模拟真实输入（input + change + 失焦）。 */
+      function typeNumber(id, text) {
+        const field = document.querySelector(`#${id}`);
+
+        field.focus();
+        field.value = String(text);
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+        field.blur();
+      }
+
+      function controlsHeight() {
+        return Math.round(
+          document.querySelector(".controls").getBoundingClientRect().height,
+        );
+      }
+
+      function toggleSwitch(id, checked) {
+        const input = document.querySelector(`#${id}`);
+
+        input.checked = checked;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+
+      function splitterDragTo(clientY) {
+        const splitter = document.querySelector("#panelSplitter");
+        const rect = splitter.getBoundingClientRect();
+        const base = {
+          bubbles: true,
+          pointerId: 3,
+          pointerType: "mouse",
+          isPrimary: true,
+        };
+
+        splitter.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            ...base,
+            buttons: 1,
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + 4,
+          }),
+        );
+        splitter.dispatchEvent(
+          new PointerEvent("pointermove", {
+            ...base,
+            buttons: 1,
+            clientX: rect.left + rect.width / 2,
+            clientY,
+          }),
+        );
+        splitter.dispatchEvent(
+          new PointerEvent("pointerup", {
+            ...base,
+            buttons: 0,
+            clientX: rect.left + rect.width / 2,
+            clientY,
+          }),
+        );
+      }
+
+      /** 统计曲线画布上非背景色的像素数，用来判断是否真的画了东西。 */
+      function countCurveInk() {
+        const canvas = document.querySelector("#curveCanvas");
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        let ink = 0;
+
+        for (let index = 0; index < data.length; index += 4) {
+          if (data[index] > 24 || data[index + 1] > 26 || data[index + 2] > 30) {
+            ink += 1;
+          }
+        }
+
+        return ink;
+      }
+
+      /* ------------------------ 色调分离辅助函数 ------------------------ */
+
+      function regionPixels(canvas, x, y, width, height) {
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+
+        return context.getImageData(x, y, width, height).data;
+      }
+
+      /** 一块区域里有多少种不同的亮度值。 */
+      function distinctLuma(canvas, x, y, width, height) {
+        const data = regionPixels(canvas, x, y, width, height);
+        const values = new Set();
+
+        for (let index = 0; index < data.length; index += 4) {
+          values.add(
+            Math.round(
+              0.2126 * data[index] + 0.7152 * data[index + 1] + 0.0722 * data[index + 2],
+            ),
+          );
+        }
+
+        return values.size;
+      }
+
+      /** 一块区域里某个通道有多少种不同的取值。 */
+      function distinctChannel(canvas, x, y, width, height, channel) {
+        const data = regionPixels(canvas, x, y, width, height);
+        const values = new Set();
+
+        for (let index = channel; index < data.length; index += 4) {
+          values.add(data[index]);
+        }
+
+        return values.size;
+      }
+
+      function countPosterizeInk() {
+        const canvas = document.querySelector("#posterizePreview");
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        let ink = 0;
+
+        for (let index = 0; index < data.length; index += 4) {
+          if (data[index] > 24 || data[index + 1] > 26 || data[index + 2] > 30) {
+            ink += 1;
+          }
+        }
+
+        return ink;
+      }
+
+      function readoutText() {
+        return document.querySelector("#whiteBalanceModeValue").value;
+      }
+
+      /* ------------------------ 旋转与裁切辅助函数 ------------------------ */
+
+      function canvasSize(canvas) {
+        return { width: canvas.width, height: canvas.height };
+      }
+
+      function clickButton(id) {
+        document.querySelector("#" + id).click();
+      }
+
+      /** 某块区域的平均 alpha（0-255），用来判断旋转后的空白角。 */
+      function regionAlpha(canvas, x, y, width, height) {
+        const data = regionPixels(canvas, x, y, width, height);
+        let sum = 0;
+
+        for (let index = 3; index < data.length; index += 4) {
+          sum += data[index];
+        }
+
+        return sum / (data.length / 4);
+      }
+
+      /** 裁切框内部 0-1 位置 → 客户端坐标。 */
+      function cropBoxClientPoint(u, v) {
+        const rect = document.querySelector("#cropBox").getBoundingClientRect();
+
+        return {
+          x: rect.left + rect.width * u,
+          y: rect.top + rect.height * v,
+        };
+      }
+
+      /** 在指定元素上模拟一次裁切拖动（target 决定是移动、缩放还是重画）。 */
+      function dispatchCropDrag(target, from, to) {
+        const base = {
+          bubbles: true,
+          pointerId: 7,
+          pointerType: "mouse",
+          isPrimary: true,
+        };
+
+        target.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            ...base,
+            buttons: 1,
+            clientX: from.x,
+            clientY: from.y,
+          }),
+        );
+        target.dispatchEvent(
+          new PointerEvent("pointermove", {
+            ...base,
+            buttons: 1,
+            clientX: to.x,
+            clientY: to.y,
+          }),
+        );
+        target.dispatchEvent(
+          new PointerEvent("pointerup", {
+            ...base,
+            buttons: 0,
+            clientX: to.x,
+            clientY: to.y,
+          }),
+        );
+      }
+
+      function rotationAngleValue() {
+        return Number(document.querySelector("#rotationAngle").value);
+      }
+
+      function setRotationAngle(value) {
+        typeNumber("rotationAngleNumber", value);
+      }
+
+      /**
+       * 点击「导出图片」，截下真正交给编码器的导出画布。
+       * 直接拦 canvas.toBlob，避免在无头环境里解析下载的 blob。
+       */
+      async function captureExport() {
+        const captured = [];
+        const originalToBlob = HTMLCanvasElement.prototype.toBlob;
+        const exportButton = document.querySelector("#exportButton");
+
+        HTMLCanvasElement.prototype.toBlob = function patched(
+          callback,
+          type,
+          quality,
+        ) {
+          captured.push({ canvas: this, type });
+
+          return originalToBlob.call(this, callback, type, quality);
+        };
+
+        try {
+          clickButton("exportButton");
+          await waitFor(() => captured.length > 0, "导出画布", 200);
+          await waitFor(() => !exportButton.disabled, "导出完成", 200);
+        } finally {
+          HTMLCanvasElement.prototype.toBlob = originalToBlob;
+        }
+
+        if (captured.length === 0) {
+          return null;
+        }
+
+        const { canvas, type } = captured[0];
+
+        return {
+          canvas,
+          type,
+          width: canvas.width,
+          height: canvas.height,
+        };
+      }
+
+      async function run() {
+        const source = await (await fetch("../index.html")).text();
+        const parsed = new DOMParser().parseFromString(source, "text/html");
+
+        for (const link of parsed.head.querySelectorAll('link[rel="stylesheet"]')) {
+          const stylesheet = document.createElement("link");
+          const href = link.getAttribute("href") || "";
+
+          stylesheet.rel = "stylesheet";
+          // 本页在 tools/ 子目录下，样式表路径需要回到上一级
+          stylesheet.href = href.startsWith("http") ? href : "../" + href.replace(/^\.\//, "");
+          document.head.append(stylesheet);
+        }
+
+        document.body.insertAdjacentHTML("beforeend", parsed.body.innerHTML);
+        await loadScript("../white-balance.js");
+        await loadScript("../geometry.js");
+        await loadScript("../curves.js");
+        await loadScript("../posterize.js");
+        await loadScript("../app.js");
+
+        check("白平衡模块已载入", Boolean(window.ColorWhiteBalance));
+        check("旋转裁切模块已载入", Boolean(window.ColorGeometry));
+        check("曲线模块已载入", Boolean(window.ColorCurves));
+        check("色调分离模块已载入", Boolean(window.ColorPosterize));
+        check(
+          forceWebgl1
+            ? "已屏蔽 WebGL2（本次运行验证 WebGL1 回退着色器）"
+            : "使用 WebGL2 渲染",
+          forceWebgl1
+            ? document.createElement("canvas").getContext("webgl2") === null
+            : Boolean(document.createElement("canvas").getContext("webgl2")),
+        );
+
+        // 注入测试图片
+        const imageCanvas = buildTestImage();
+        const blob = await new Promise((resolve) =>
+          imageCanvas.toBlob(resolve, "image/png"),
+        );
+        const file = new File([blob], "wb-smoke.png", { type: "image/png" });
+        const transfer = new DataTransfer();
+
+        transfer.items.add(file);
+        const fileInput = document.querySelector("#fileInput");
+
+        fileInput.files = transfer.files;
+        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+
+        const ready = await waitFor(() => {
+          const canvas = document.querySelector("#processedCanvas");
+
+          return (
+            !document.querySelector("#controlsFieldset").disabled &&
+            canvas.width > 0 &&
+            canvas.height > 0
+          );
+        }, "测试图片加载");
+
+        if (!ready) {
+          return;
+        }
+
+        // ?shot=<方式>：只加载界面和图片，停在指定白平衡方式，方便截图查看外观
+        const shotMode = new URLSearchParams(window.location.search).get("shot");
+
+        if (shotMode) {
+          document.querySelector("#report").hidden = true;
+
+          const wbModes = ["manual", "kelvin", "preset", "auto", "grayPoint", "gains", "off"];
+
+          setSelect("whiteBalanceMode", wbModes.includes(shotMode) ? shotMode : "manual");
+
+          if (shotMode === "preset") {
+            setSelect("wbPreset", "cloudy");
+          }
+
+          if (shotMode === "grayPoint") {
+            clickCanvasPixel(document.querySelector("#originalCanvas"), 280, 160);
+          }
+
+          if (shotMode === "curve") {
+            document.querySelector("#curveButton").click();
+            await frames(4);
+            dispatchCurveDoubleClick(curveClientPoint(0.25, 0.14));
+            await frames(3);
+            dispatchCurveDoubleClick(curveClientPoint(0.75, 0.88));
+            await frames(4);
+          }
+
+          if (shotMode === "posterize") {
+            document.querySelector("#posterizeButton").click();
+            await frames(4);
+            setSlider("posterizeLevels", 5);
+            await frames(4);
+          }
+
+          if (shotMode === "switches") {
+            document.querySelector("#posterizeButton").click();
+            await frames(4);
+            setSlider("posterizeLevels", 6);
+            await frames(3);
+            document.querySelector("#closePosterizeDialogButton").click();
+            await frames(3);
+            document.querySelector("#curveButton").click();
+            await frames(4);
+            dispatchCurveDoubleClick(curveClientPoint(0.25, 0.16));
+            await frames(3);
+            dispatchCurveDoubleClick(curveClientPoint(0.75, 0.86));
+            await frames(4);
+            document.querySelector("#closeCurveDialogButton").click();
+            await frames(3);
+          }
+
+          if (shotMode === "crop") {
+            // 拉直 + 裁切：工具条与裁切框同时出现在图片框上
+            setRotationAngle(-6.5);
+            await frames(5);
+            clickButton("cropButton");
+            await frames(5);
+            setSelect("cropAspect", "1:1");
+            await frames(5);
+            dispatchCropDrag(
+              document.querySelector("#cropBox"),
+              cropBoxClientPoint(0.5, 0.5),
+              cropBoxClientPoint(0.62, 0.58),
+            );
+            await frames(5);
+          }
+
+          if (shotMode === "straighten") {
+            // 拉直 + 自动去掉空白角：旋转后画面不再有透明边角
+            setRotationAngle(8);
+            await frames(5);
+            clickButton("cropButton");
+            await frames(4);
+            clickButton("cropAutoButton");
+            await frames(4);
+            clickButton("cropApplyButton");
+            await frames(6);
+          }
+
+          await frames(4);
+          document.title = "SHOT-READY";
+          return;
+        }
+
+        const originalCanvas = document.querySelector("#originalCanvas");
+        const processedCanvas = document.querySelector("#processedCanvas");
+        const sourceMean = readWhole(originalCanvas);
+        const sourceWarmth = sourceMean[0] - sourceMean[2];
+        // 上半部分是中性灰阶梯，是判断「色偏是否被消除」最可靠的区域
+        const sourceGrayStrip = readRegion(originalCanvas, 0, 0, 320, 120);
+
+        check(
+          "测试图本身带暖色偏（R 明显高于 B）",
+          sourceWarmth > 20,
+          `R-B=${sourceWarmth.toFixed(1)}`,
+        );
+        check(
+          "测试图的灰阶区域整体偏暖",
+          sourceGrayStrip[0] - sourceGrayStrip[2] > 30,
+          `灰阶 R-B=${(sourceGrayStrip[0] - sourceGrayStrip[2]).toFixed(1)}`,
+        );
+
+        // 1. 关闭白平衡时结果应与原图一致
+        setSelect("whiteBalanceMode", "off");
+        await frames(3);
+        const offMean = readWhole(processedCanvas);
+
+        check(
+          "关闭白平衡时画面等于原图",
+          offMean.every((value, index) => near(value, sourceMean[index], 3)),
+          `处理=${offMean.map((v) => v.toFixed(1)).join("/")} 原图=${sourceMean
+            .map((v) => v.toFixed(1))
+            .join("/")}`,
+        );
+        check("关闭时下拉菜单输出为「关闭」", readoutText() === "关闭", readoutText());
+        check(
+          "关闭时隐藏全部白平衡参数行",
+          visibleRows().length === 0,
+          visibleRows().join(","),
+        );
+
+        // 2. 手动双轴模式：暖冷滑条应当有效，且切到其它方式后不再叠加
+        setSelect("whiteBalanceMode", "manual");
+        setSlider("temperature", 80);
+        await frames(3);
+        const manualWarm = readWhole(processedCanvas);
+
+        check(
+          "手动双轴 +80 让画面明显变暖",
+          manualWarm[0] - manualWarm[2] > sourceWarmth + 20,
+          `R-B=${(manualWarm[0] - manualWarm[2]).toFixed(1)}`,
+        );
+        check(
+          "手动模式显示色温与白平衡两行",
+          visibleRows().sort().join(",") === "temperature,whiteBalance",
+          visibleRows().join(","),
+        );
+
+        setSelect("whiteBalanceMode", "off");
+        await frames(3);
+        const offAgain = readWhole(processedCanvas);
+
+        check(
+          "切到关闭后手动滑条的贡献被完全撤掉",
+          offAgain.every((value, index) => near(value, sourceMean[index], 3)),
+          `处理=${offAgain.map((v) => v.toFixed(1)).join("/")}`,
+        );
+        setSlider("temperature", 0);
+
+        // 3. 开尔文色温 + 色调
+        setSelect("whiteBalanceMode", "kelvin");
+        setSlider("wbKelvin", 9000);
+        await frames(3);
+        const warm = readWhole(processedCanvas);
+
+        setSlider("wbKelvin", 4000);
+        await frames(3);
+        const cool = readWhole(processedCanvas);
+
+        check(
+          "色温 9000K 比 4000K 更暖",
+          warm[0] - warm[2] > cool[0] - cool[2] + 25,
+          `9000K R-B=${(warm[0] - warm[2]).toFixed(1)}，4000K R-B=${(
+            cool[0] - cool[2]
+          ).toFixed(1)}`,
+        );
+        check(
+          "色温模式显示色温 K 与色调两行",
+          visibleRows().sort().join(",") === "wbKelvin,wbTint",
+          visibleRows().join(","),
+        );
+        check(
+          "色温读数跟随滑条",
+          readoutText() === "4000K",
+          readoutText(),
+        );
+
+        setSlider("wbTint", 80);
+        await frames(3);
+        const magenta = readWhole(processedCanvas);
+
+        check(
+          "色调 +80 让画面偏品红（绿色分量下降）",
+          magenta[1] < cool[1] - 2,
+          `G ${cool[1].toFixed(1)} → ${magenta[1].toFixed(1)}`,
+        );
+        setSlider("wbTint", 0);
+
+        // 4. 场景预设
+        setSelect("whiteBalanceMode", "preset");
+        await frames(2);
+        setSelect("wbPreset", "shade");
+        await frames(3);
+
+        check(
+          "预设「阴影 7000K」写入色温滑条",
+          Number(document.querySelector("#wbKelvin").value) === 7000,
+          document.querySelector("#wbKelvin").value,
+        );
+        check(
+          "预设模式显示预设 / 色温 / 色调三行",
+          visibleRows().sort().join(",") === "wbKelvin,wbPreset,wbTint",
+          visibleRows().join(","),
+        );
+
+        setSelect("wbPreset", "incandescent");
+        await frames(3);
+        const tungsten = readWhole(processedCanvas);
+
+        check(
+          "预设「白炽灯 2856K」把画面校冷",
+          tungsten[0] - tungsten[2] < sourceWarmth - 30,
+          `R-B=${(tungsten[0] - tungsten[2]).toFixed(1)}（原图 ${sourceWarmth.toFixed(1)}）`,
+        );
+        check(
+          "手动拖动色温后预设自动变为自定义",
+          (() => {
+            setSlider("wbKelvin", 6200);
+            return document.querySelector("#wbPreset").value === "custom";
+          })(),
+          document.querySelector("#wbPreset").value,
+        );
+
+        // 5. 自动分析
+        setSelect("whiteBalanceMode", "auto");
+        await frames(4);
+
+        const autoMean = readWhole(processedCanvas);
+        const autoWarmth = autoMean[0] - autoMean[2];
+        const autoGrayStrip = readRegion(processedCanvas, 0, 0, 320, 120);
+        const autoStripCast = autoGrayStrip[0] - autoGrayStrip[2];
+
+        check(
+          "自动白平衡消除了灰阶区域的暖色偏",
+          Math.abs(autoStripCast) < 6,
+          `灰阶 R-B=${(sourceGrayStrip[0] - sourceGrayStrip[2]).toFixed(1)} → ${autoStripCast.toFixed(1)}`,
+        );
+        check(
+          "自动白平衡的方向正确（不再更暖）",
+          autoWarmth < sourceWarmth,
+          `整体 R-B=${sourceWarmth.toFixed(1)} → ${autoWarmth.toFixed(1)}`,
+        );
+        check(
+          "自动模式显示算法与强度两行",
+          visibleRows().sort().join(",") === "wbAlgorithm,wbStrength",
+          visibleRows().join(","),
+        );
+        check(
+          "自动模式给出等效色温读数",
+          /^≈\d+K$/.test(readoutText()),
+          readoutText(),
+        );
+
+        const grayCardAuto = readRegion(processedCanvas, 260, 140, 40, 40);
+
+        check(
+          "自动白平衡后灰卡变成中性灰",
+          Math.abs(grayCardAuto[0] - grayCardAuto[1]) < 6 &&
+            Math.abs(grayCardAuto[2] - grayCardAuto[1]) < 6,
+          grayCardAuto.map((value) => value.toFixed(1)).join("/"),
+        );
+
+        // 每种自动算法都应给出可用结果
+        for (const algorithm of ["grayWorld", "shadesOfGray", "whitePatch", "percentileWhite", "grayEdge"]) {
+          setSelect("wbAlgorithm", algorithm);
+          await frames(3);
+          const mean = readWhole(processedCanvas);
+
+          check(
+            `自动算法 ${algorithm} 输出的灰卡接近中性`,
+            Math.abs(
+              readRegion(processedCanvas, 260, 140, 40, 40)[0] -
+                readRegion(processedCanvas, 260, 140, 40, 40)[1],
+            ) < 12,
+            `整体=${mean.map((value) => value.toFixed(0)).join("/")}`,
+          );
+        }
+
+        setSelect("wbAlgorithm", "grayWorld");
+
+        // 强度 0 应当回到原图
+        setSlider("wbStrength", 0);
+        await frames(3);
+        const zeroStrength = readWhole(processedCanvas);
+
+        check(
+          "强度 0 等于不调整",
+          zeroStrength.every((value, index) => near(value, sourceMean[index], 3)),
+          zeroStrength.map((value) => value.toFixed(1)).join("/"),
+        );
+        setSlider("wbStrength", 100);
+
+        // 6. 灰点拾色
+        setSelect("whiteBalanceMode", "grayPoint");
+        await frames(2);
+
+        check(
+          "灰点模式提示尚未取色",
+          readoutText() === "未取色",
+          readoutText(),
+        );
+
+        clickCanvasPixel(originalCanvas, 280, 160);
+        await frames(3);
+
+        const grayPointCard = readRegion(processedCanvas, 260, 140, 40, 40);
+        const marker = document.querySelector(".neutral-picker-mark");
+
+        check(
+          "灰点拾色后灰卡变成中性灰",
+          Math.abs(grayPointCard[0] - grayPointCard[1]) < 6 &&
+            Math.abs(grayPointCard[2] - grayPointCard[1]) < 6,
+          grayPointCard.map((value) => value.toFixed(1)).join("/"),
+        );
+        const grayPointHint = document.querySelector("#wbGrayPointHint").textContent;
+        const sampleMatch = /已取样 R(\d+) G(\d+) B(\d+)/.exec(grayPointHint);
+
+        check(
+          "灰点读数显示取样处的 sRGB 颜色（与画面一致）",
+          document.querySelector("#wbGrayPointValue").value === "已取色" &&
+            sampleMatch !== null &&
+            Math.abs(Number(sampleMatch[1]) - 207) <= 2 &&
+            Math.abs(Number(sampleMatch[2]) - 176) <= 2 &&
+            Math.abs(Number(sampleMatch[3]) - 126) <= 2,
+          `${document.querySelector("#wbGrayPointValue").value} / ${grayPointHint}`,
+        );
+        check(
+          "拾色标记显示在预览画布上",
+          Boolean(marker && !marker.hidden),
+          marker ? `left=${marker.style.left} top=${marker.style.top}` : "缺少标记",
+        );
+        check(
+          "灰点模式显示强度与操作提示两行",
+          visibleRows().sort().join(",") === "wbStrength",
+          visibleRows().join(","),
+        );
+
+        // 7. RGB 通道增益
+        setSelect("whiteBalanceMode", "gains");
+        await frames(2);
+        setSlider("wbGainR", 50);
+        await frames(3);
+        const gained = readWhole(processedCanvas);
+
+        check(
+          "红增益 +50 让红色分量显著上升",
+          gained[0] > sourceMean[0] + 10,
+          `R ${sourceMean[0].toFixed(1)} → ${gained[0].toFixed(1)}`,
+        );
+        check(
+          "增益数字框显示倍率",
+          document.querySelector("#wbGainRNumber").value === "2.00",
+          document.querySelector("#wbGainRNumber").value,
+        );
+        check(
+          "增益模式显示三个通道行",
+          visibleRows().sort().join(",") === "wbGainB,wbGainG,wbGainR",
+          visibleRows().join(","),
+        );
+
+        // 8. 复位
+        document.querySelector("#resetButton").click();
+        await frames(3);
+
+        check(
+          "重置后回到默认方式（手动双轴）",
+          document.querySelector("#whiteBalanceMode").value === "manual",
+          document.querySelector("#whiteBalanceMode").value,
+        );
+        check(
+          "重置后增益滑条归零",
+          document.querySelector("#wbGainR").value === "0",
+          document.querySelector("#wbGainR").value,
+        );
+        check(
+          "重置后色温滑条回到 6500K",
+          document.querySelector("#wbKelvin").value === "6500",
+          document.querySelector("#wbKelvin").value,
+        );
+
+        // 9. AI 输入渲染也走同一套白平衡（导出路径）
+        setSelect("whiteBalanceMode", "kelvin");
+        setSlider("wbKelvin", 9500);
+        await frames(3);
+        const preview = readWhole(processedCanvas);
+
+        check(
+          "预览使用了色温矩阵（画面变暖）",
+          preview[0] - preview[2] > sourceWarmth + 15,
+          `R-B=${(preview[0] - preview[2]).toFixed(1)}（原图 ${sourceWarmth.toFixed(1)}）`,
+        );
+
+        // 10. 曲线
+        document.querySelector("#resetButton").click();
+        await frames(4);
+
+        const curveBase = readWhole(processedCanvas);
+
+        check(
+          "进入曲线测试前画面已回到原图",
+          curveBase.every((value, index) => near(value, sourceMean[index], 2)),
+          curveBase.map((value) => value.toFixed(1)).join("/"),
+        );
+
+        const curveDialog = document.querySelector("#curveDialog");
+        const curvePointValue = document.querySelector("#curvePointValue");
+
+        check("曲线窗口初始是关闭的", curveDialog.open === false);
+
+        document.querySelector("#curveButton").click();
+        await frames(5);
+
+        check("点击「曲线」按钮弹出曲线窗口", curveDialog.open === true);
+        check("曲线按钮在打开后仍可再次点击", !document.querySelector("#curveButton").disabled);
+
+        const ink = countCurveInk();
+
+        // 只有网格与曲线约 3400 像素，直方图会明显超出这个量级
+        check(
+          "曲线窗口绘制了网格、对角线、曲线与直方图",
+          ink > 5000,
+          `着色像素 ${ink}`,
+        );
+
+        // 双击新建关键点：把中间调提亮
+        dispatchCurveDoubleClick(curveClientPoint(0.5, 0.72));
+        await frames(5);
+
+        const brightened = readWhole(processedCanvas);
+
+        check(
+          "双击新建关键点后画面变亮",
+          brightened[1] > sourceMean[1] + 8,
+          `G ${sourceMean[1].toFixed(1)} → ${brightened[1].toFixed(1)}`,
+        );
+        check(
+          "读数显示关键点的输入/输出值",
+          /^输入 12[0-9] → 输出 18[0-9]$/.test(curvePointValue.value),
+          curvePointValue.value,
+        );
+
+        // 拖动关键点：把它拉低，画面随之压暗
+        dispatchCurveDrag(curveClientPoint(0.5, 0.72), curveClientPoint(0.5, 0.25));
+        await frames(5);
+
+        const darkened = readWhole(processedCanvas);
+
+        check(
+          "拖动关键点后画面压暗",
+          darkened[1] < sourceMean[1] - 8,
+          `G ${sourceMean[1].toFixed(1)} → ${darkened[1].toFixed(1)}`,
+        );
+        check(
+          "拖动过程中读数同步更新",
+          /→ 输出 6[0-9]$/.test(curvePointValue.value),
+          curvePointValue.value,
+        );
+
+        // 控制柄调整斜率
+        document.querySelector("#resetCurveButton").click();
+        await frames(3);
+        dispatchCurveDoubleClick(curveClientPoint(0.5, 0.5));
+        await frames(4);
+
+        const slopeBase = readWhole(processedCanvas);
+
+        dispatchCurveDrag(curveClientPoint(2 / 3, 2 / 3), curveClientPoint(0.6, 0.95));
+        await frames(4);
+
+        const steepened = readWhole(processedCanvas);
+
+        check(
+          "向上拖控制柄提高斜率，画面变亮",
+          steepened[1] > slopeBase[1] + 2,
+          `G ${slopeBase[1].toFixed(1)} → ${steepened[1].toFixed(1)}`,
+        );
+
+        dispatchCurveDrag(curveClientPoint(0.6, 0.95), curveClientPoint(0.6, 0.05));
+        await frames(4);
+
+        const flattened = readWhole(processedCanvas);
+
+        check(
+          "向下拖控制柄降低斜率，画面变暗",
+          flattened[1] < slopeBase[1] - 2,
+          `G ${slopeBase[1].toFixed(1)} → ${flattened[1].toFixed(1)}`,
+        );
+
+        // Del 删除关键点
+        dispatchCurveKey("Delete");
+        await frames(4);
+
+        const afterDelete = readWhole(processedCanvas);
+
+
+        check(
+          "按 Del 删除关键点后曲线恢复原状",
+          afterDelete.every((value, index) => near(value, sourceMean[index], 2)),
+          afterDelete.map((value) => value.toFixed(1)).join("/"),
+        );
+        check("删除后读数回到未选中状态", curvePointValue.value === "未选中关键点", curvePointValue.value);
+
+        // 单通道曲线：只影响对应通道
+        document.querySelector('.curve-channel[data-channel="r"]').click();
+        await frames(2);
+        dispatchCurveDoubleClick(curveClientPoint(0.5, 0.8));
+        await frames(5);
+
+        const redOnly = readWhole(processedCanvas);
+
+        check(
+          "红通道曲线只抬高红色分量",
+          redOnly[0] > sourceMean[0] + 8 &&
+            Math.abs(redOnly[1] - sourceMean[1]) < 4 &&
+            Math.abs(redOnly[2] - sourceMean[2]) < 4,
+          `R ${sourceMean[0].toFixed(1)}→${redOnly[0].toFixed(1)}，G ${sourceMean[1].toFixed(1)}→${redOnly[1].toFixed(1)}，B ${sourceMean[2].toFixed(1)}→${redOnly[2].toFixed(1)}`,
+        );
+        check(
+          "通道按钮切换到红色高亮",
+          document
+            .querySelector('.curve-channel[data-channel="r"]')
+            .classList.contains("is-active"),
+        );
+
+        // 重置按钮只复位当前通道
+        document.querySelector("#resetCurveButton").click();
+        await frames(4);
+
+        const afterChannelReset = readWhole(processedCanvas);
+
+        check(
+          "重置按钮复位当前通道",
+          afterChannelReset.every((value, index) => near(value, sourceMean[index], 2)),
+          afterChannelReset.map((value) => value.toFixed(1)).join("/"),
+        );
+
+        // 复合曲线与单通道曲线叠加
+        document.querySelector('.curve-channel[data-channel="rgb"]').click();
+        await frames(2);
+        dispatchCurveDoubleClick(curveClientPoint(0.5, 0.6));
+        await frames(4);
+        document.querySelector('.curve-channel[data-channel="r"]').click();
+        await frames(2);
+        dispatchCurveDoubleClick(curveClientPoint(0.5, 0.7));
+        await frames(5);
+
+        const combined = readWhole(processedCanvas);
+
+        check(
+          "复合曲线与单通道曲线叠加生效",
+          combined[0] > sourceMean[0] + 10 && combined[2] > sourceMean[2] + 4,
+          combined.map((value) => value.toFixed(1)).join("/"),
+        );
+
+        // 关闭窗口
+        document.querySelector("#closeCurveDialogButton").click();
+        await frames(3);
+
+        check("关闭按钮收起曲线窗口", curveDialog.open === false);
+
+        // 重新打开后曲线设置仍然保留
+        document.querySelector("#curveButton").click();
+        await frames(4);
+
+        const reopened = readWhole(processedCanvas);
+
+        check(
+          "重新打开窗口后曲线设置保持不变",
+          reopened.every((value, index) => near(value, combined[index], 1)),
+          reopened.map((value) => value.toFixed(1)).join("/"),
+        );
+
+        // 全局重置会清空曲线
+        document.querySelector("#resetButton").click();
+        await frames(4);
+
+        const afterGlobalReset = readWhole(processedCanvas);
+
+        check(
+          "全局重置清空所有曲线",
+          afterGlobalReset.every((value, index) => near(value, sourceMean[index], 2)),
+          afterGlobalReset.map((value) => value.toFixed(1)).join("/"),
+        );
+
+        // 11. 色调分离
+        document.querySelector("#closeCurveDialogButton").click();
+        await frames(3);
+
+        const posterizeDialog = document.querySelector("#posterizeDialog");
+        const posterizeSummary = document.querySelector("#posterizeSummary");
+        const rampRegion = [0, 10, 320, 100];
+        const rampBase = distinctLuma(processedCanvas, ...rampRegion);
+        const channelBase = [0, 1, 2].map((channel) =>
+          distinctChannel(processedCanvas, ...rampRegion, channel),
+        );
+
+        check("测试图灰阶区有 8 个台阶", rampBase === 8, `不同亮度 ${rampBase}`);
+        check(
+          "默认不应用色调分离（强度 0）",
+          document.querySelector("#posterizeAmount").value === "0",
+          document.querySelector("#posterizeAmount").value,
+        );
+
+        document.querySelector("#posterizeButton").click();
+        await frames(5);
+
+        check("点击「色调分离」按钮弹出窗口", posterizeDialog.open === true);
+        check(
+          "打开窗口即套用默认分离效果",
+          document.querySelector("#posterizeAmount").value === "100",
+          document.querySelector("#posterizeAmount").value,
+        );
+        check(
+          "分级预览条已绘制",
+          countPosterizeInk() > 5000,
+          `着色像素 ${countPosterizeInk()}`,
+        );
+        check(
+          "摘要显示级数、强度与模式",
+          /8 级 · 100%/.test(posterizeSummary.value),
+          posterizeSummary.value,
+        );
+
+        // 级数 4：灰阶从 8 段压成 4 段
+        setSlider("posterizeLevels", 4);
+        await frames(5);
+
+        const fourLevels = distinctLuma(processedCanvas, ...rampRegion);
+
+        check(
+          "4 级分离把灰阶压成 4 段",
+          fourLevels <= 5 && fourLevels < rampBase,
+          `不同亮度 ${rampBase} → ${fourLevels}`,
+        );
+        check(
+          "摘要跟随滑条更新",
+          /4 级/.test(posterizeSummary.value),
+          posterizeSummary.value,
+        );
+
+        // 级数 2：只剩黑白两段
+        setSlider("posterizeLevels", 2);
+        await frames(5);
+
+        check(
+          "2 级分离只剩黑白两段",
+          distinctLuma(processedCanvas, ...rampRegion) <= 3,
+          `不同亮度 ${distinctLuma(processedCanvas, ...rampRegion)}`,
+        );
+
+        setSlider("posterizeLevels", 4);
+        await frames(3);
+
+        // 强度 0 回到原图
+        setSlider("posterizeAmount", 0);
+        await frames(4);
+
+        const zeroAmount = readWhole(processedCanvas);
+
+        check(
+          "强度 0 时画面回到原图",
+          zeroAmount.every((value, index) => near(value, sourceMean[index], 2)),
+          zeroAmount.map((value) => value.toFixed(1)).join("/"),
+        );
+        check("强度 0 时摘要提示不生效", /强度 0/.test(posterizeSummary.value), posterizeSummary.value);
+
+        setSlider("posterizeAmount", 100);
+        await frames(3);
+
+        // 按通道模式
+        setSelect("posterizeMode", "channels");
+        await frames(4);
+
+        check(
+          "按通道模式显示通道开关",
+          document.querySelector("#posterizeChannelRow").hidden === false,
+        );
+
+        setSlider("posterizeLevels", 4);
+        await frames(4);
+
+        const allChannels = [0, 1, 2].map((channel) =>
+          distinctChannel(processedCanvas, ...rampRegion, channel),
+        );
+
+        check(
+          "按通道模式三个通道都出现色块",
+          allChannels.every((count) => count <= 5),
+          `R${allChannels[0]} G${allChannels[1]} B${allChannels[2]}`,
+        );
+
+        // 只保留红通道
+        document.querySelector('.posterize-channel[data-channel="g"]').click();
+        document.querySelector('.posterize-channel[data-channel="b"]').click();
+        await frames(5);
+
+        const redBandedChannels = [0, 1, 2].map((channel) =>
+          distinctChannel(processedCanvas, ...rampRegion, channel),
+        );
+
+        check(
+          "只分离红通道时绿蓝保持连续",
+          redBandedChannels[0] <= 5 &&
+            redBandedChannels[1] === channelBase[1] &&
+            redBandedChannels[2] === channelBase[2],
+          `R ${channelBase[0]}→${redBandedChannels[0]}，G ${channelBase[1]}→${redBandedChannels[1]}，B ${channelBase[2]}→${redBandedChannels[2]}`,
+        );
+        check(
+          "摘要列出参与分离的通道",
+          /R/.test(posterizeSummary.value) && !/R\+G/.test(posterizeSummary.value),
+          posterizeSummary.value,
+        );
+
+        // 通道全关 → 不生效
+        document.querySelector('.posterize-channel[data-channel="r"]').click();
+        await frames(5);
+
+        const allOff = readWhole(processedCanvas);
+
+        check(
+          "通道全部关闭时画面不变",
+          allOff.every((value, index) => near(value, sourceMean[index], 2)),
+          allOff.map((value) => value.toFixed(1)).join("/"),
+        );
+        check(
+          "通道全关时摘要提示",
+          /未选择任何通道/.test(posterizeSummary.value),
+          posterizeSummary.value,
+        );
+
+        // 窗口内重置：回到默认分离效果
+        document.querySelector("#resetPosterizeButton").click();
+        await frames(5);
+
+        check(
+          "窗口内重置回到默认分离效果",
+          document.querySelector("#posterizeLevels").value === "8" &&
+            document.querySelector("#posterizeAmount").value === "100" &&
+            document.querySelector("#posterizeMode").value === "luma" &&
+            document.querySelector("#posterizeChannelRow").hidden === true,
+          `${document.querySelector("#posterizeLevels").value} 级 / ${document.querySelector("#posterizeAmount").value}% / ${document.querySelector("#posterizeMode").value}`,
+        );
+        check(
+          "重置后画面重新出现色块",
+          distinctLuma(processedCanvas, ...rampRegion) <= 9,
+          `不同亮度 ${distinctLuma(processedCanvas, ...rampRegion)}`,
+        );
+
+        // 关闭窗口，效果保留
+        document.querySelector("#closePosterizeDialogButton").click();
+        await frames(3);
+
+        check("关闭按钮收起色调分离窗口", posterizeDialog.open === false);
+
+        // 全局重置会关掉色调分离
+        document.querySelector("#resetButton").click();
+        await frames(4);
+
+        check(
+          "全局重置后色调分离回到强度 0",
+          document.querySelector("#posterizeAmount").value === "0",
+          document.querySelector("#posterizeAmount").value,
+        );
+        check(
+          "全局重置后画面回到原图",
+          readWhole(processedCanvas).every((value, index) =>
+            near(value, sourceMean[index], 2),
+          ),
+          readWhole(processedCanvas).map((value) => value.toFixed(1)).join("/"),
+        );
+
+        // Esc 关闭两个窗口
+        document.querySelector("#curveButton").click();
+        document.querySelector("#posterizeButton").click();
+        await frames(3);
+
+        check(
+          "曲线与色调分离可以同时打开",
+          document.querySelector("#curveDialog").open &&
+            posterizeDialog.open &&
+            document.querySelector("#posterizeDialog").style.top !== "",
+          `posterize top=${document.querySelector("#posterizeDialog").style.top}`,
+        );
+
+        dispatchCurveKey("Escape");
+        await frames(3);
+
+        check(
+          "Esc 同时关闭两个窗口",
+          document.querySelector("#curveDialog").open === false &&
+            posterizeDialog.open === false,
+        );
+
+        // 12. 数字输入框
+        document.querySelector("#resetButton").click();
+        await frames(4);
+
+        const numberKeys = [
+          "exposure",
+          "brightness",
+          "saturation",
+          "vibrance",
+          "contrast",
+          "temperature",
+          "whiteBalance",
+          "wbKelvin",
+          "wbTint",
+          "wbStrength",
+          "wbGainR",
+          "wbGainG",
+          "wbGainB",
+          "shadows",
+          "highlights",
+          "hueShift",
+          "denoise",
+          "detail",
+        ];
+        const missingFields = numberKeys.filter(
+          (key) => !document.querySelector(`#${key}Number`),
+        );
+
+        check(
+          "每个滑条都有对应的数字输入框",
+          missingFields.length === 0,
+          missingFields.join(","),
+        );
+        check(
+          "数字输入框与滑条初始同步",
+          numberKeys.every((key) => {
+            const slider = document.querySelector(`#${key}`);
+            const field = document.querySelector(`#${key}Number`);
+
+            return Math.abs(Number(field.value) - Number(slider.value)) < 0.01 ||
+              key.startsWith("wbGain");
+          }),
+          numberKeys
+            .map((key) => `${key}=${document.querySelector(`#${key}Number`).value}`)
+            .join(" "),
+        );
+
+        // 键入曝光数值 → 画面变亮
+        typeNumber("exposureNumber", 60);
+        await frames(5);
+
+        const exposed = readWhole(processedCanvas);
+
+        check(
+          "在数字框输入曝光 60 后画面变亮",
+          exposed[1] > sourceMean[1] + 10,
+          `G ${sourceMean[1].toFixed(1)} → ${exposed[1].toFixed(1)}`,
+        );
+        check(
+          "滑条跟随数字框",
+          document.querySelector("#exposure").value === "60",
+          document.querySelector("#exposure").value,
+        );
+
+        // 拖滑条 → 数字框跟随
+        setSlider("exposure", 20);
+        await frames(3);
+
+        check(
+          "拖动滑条后数字框跟随",
+          document.querySelector("#exposureNumber").value === "20",
+          document.querySelector("#exposureNumber").value,
+        );
+
+        // 超范围输入在提交时被夹紧
+        typeNumber("exposureNumber", 999);
+        await frames(3);
+
+        check(
+          "超范围的输入被夹到滑条上限",
+          document.querySelector("#exposure").value === "100" &&
+            document.querySelector("#exposureNumber").value === "100",
+          `${document.querySelector("#exposure").value} / ${document.querySelector("#exposureNumber").value}`,
+        );
+
+        // 色温 K 直接键入
+        setSelect("whiteBalanceMode", "kelvin");
+        await frames(3);
+        typeNumber("wbKelvinNumber", 3000);
+        await frames(5);
+
+        check(
+          "色温 K 可以直接键入 3000",
+          document.querySelector("#wbKelvin").value === "3000" &&
+            readoutText() === "3000K",
+          `${document.querySelector("#wbKelvin").value} / ${readoutText()}`,
+        );
+
+        // 增益用倍率输入
+        setSelect("whiteBalanceMode", "gains");
+        await frames(3);
+        typeNumber("wbGainRNumber", 2);
+        await frames(6);
+
+        check(
+          "增益数字框按倍率输入（2 → 滑条 50）",
+          document.querySelector("#wbGainR").value === "50" &&
+            document.querySelector("#wbGainRNumber").value === "2.00",
+          `${document.querySelector("#wbGainR").value} / ${document.querySelector("#wbGainRNumber").value}`,
+        );
+        check(
+          "倍率输入改变了画面",
+          readWhole(processedCanvas)[0] > sourceMean[0] + 10,
+          readWhole(processedCanvas)[0].toFixed(1),
+        );
+
+        // 磨皮滑条同样可输入
+        typeNumber("beautifyStrengthNumber", 80);
+        await frames(3);
+
+        check(
+          "磨皮滑条也能输入数字",
+          document.querySelector("#beautifyStrength").value === "80",
+          document.querySelector("#beautifyStrength").value,
+        );
+
+        document.querySelector("#resetButton").click();
+        await frames(4);
+
+        check(
+          "重置后数字框归零",
+          document.querySelector("#exposureNumber").value === "0" &&
+            document.querySelector("#exposure").value === "0",
+          document.querySelector("#exposureNumber").value,
+        );
+
+        // 13. 分组与面板缩放
+        const groupTitles = Array.from(
+          document.querySelectorAll(".control-group-title"),
+        ).map((node) => node.textContent.trim());
+
+        check(
+          "参数面板分成四组并按要求排序",
+          groupTitles.join(",") === "基础,白平衡,影调与风格,降噪与细节",
+          groupTitles.join(","),
+        );
+
+        const basicKeys = Array.from(
+          document.querySelectorAll(".control-group")[0].querySelectorAll("[data-key]"),
+        ).map((node) => node.dataset.key);
+
+        check(
+          "基础分组的顺序为 曝光 亮度 饱和度 自然饱和度 对比度",
+          basicKeys.join(",") === "exposure,brightness,saturation,vibrance,contrast",
+          basicKeys.join(","),
+        );
+        check(
+          "AI 面板排在参数面板之后",
+          Boolean(
+            document.querySelector(".controls").lastElementChild?.id === "aiPanel",
+          ),
+        );
+
+        const naturalHeight = controlsHeight();
+
+        check(
+          "面板初始按内容自适应",
+          naturalHeight > 0 &&
+            document.querySelector("#panelSplitter") !== null,
+          `高度 ${naturalHeight}px`,
+        );
+
+        // 向下拖动分隔条 → 面板变矮，内容改为滚动
+        splitterDragTo(window.innerHeight - 150);
+        await frames(4);
+
+        const shorterHeight = controlsHeight();
+
+        check(
+          "向下拖动分隔条后面板变矮",
+          shorterHeight < naturalHeight - 20,
+          `${naturalHeight} → ${shorterHeight}`,
+        );
+        check(
+          "面板变矮后可以滚动查看全部参数",
+          document.querySelector(".controls").scrollHeight >
+            document.querySelector(".controls").clientHeight,
+          `scrollHeight=${document.querySelector(".controls").scrollHeight} clientHeight=${document.querySelector(".controls").clientHeight}`,
+        );
+        check(
+          "面板高度写入 CSS 变量",
+          /^\d+px$/.test(
+            document
+              .querySelector(".app-shell")
+              .style.getPropertyValue("--controls-height")
+              .trim(),
+          ),
+          document.querySelector(".app-shell").style.getPropertyValue("--controls-height"),
+        );
+
+        // 向上拖动 → 面板变高
+        splitterDragTo(window.innerHeight - shorterHeight - 110);
+        await frames(4);
+
+        const tallerHeight = controlsHeight();
+
+        check(
+          "向上拖动分隔条后面板变高",
+          tallerHeight > shorterHeight + 60,
+          `${shorterHeight} → ${tallerHeight}`,
+        );
+
+        // 拖到顶也不会把预览挤没
+        splitterDragTo(0);
+        await frames(4);
+
+        const maxedHeight = controlsHeight();
+        const previewHeight = Math.round(
+          document.querySelector("#previewStage").getBoundingClientRect().height,
+        );
+
+        check(
+          "面板高度有上限，预览区保留最小高度",
+          previewHeight >= 159,
+          `预览 ${previewHeight}px，面板 ${maxedHeight}px`,
+        );
+
+        // 双击恢复自适应
+        document
+          .querySelector("#panelSplitter")
+          .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+        await frames(4);
+
+        // 14. 开启 / 关闭勾选框
+        check(
+          "双击分隔条恢复自适应高度",
+          Math.abs(controlsHeight() - naturalHeight) < 30,
+          `${maxedHeight} → ${controlsHeight()}（自适应 ${naturalHeight}）`,
+        );
+
+        document.querySelector("#resetButton").click();
+        await frames(4);
+
+        const posterizeSwitch = document.querySelector("#posterizeEnabled");
+        const curvesSwitch = document.querySelector("#curvesEnabled");
+
+        check(
+          "两个效果各有一个开启勾选框",
+          Boolean(posterizeSwitch && curvesSwitch) &&
+            posterizeSwitch.type === "checkbox" &&
+            curvesSwitch.type === "checkbox",
+        );
+        check(
+          "默认状态：曲线开启、色调分离关闭",
+          curvesSwitch.checked === true && posterizeSwitch.checked === false,
+          `曲线=${curvesSwitch.checked} 色调分离=${posterizeSwitch.checked}`,
+        );
+
+        // 曲线：画一条 S 曲线后关闭勾选，画面应回到原图，再打开应恢复
+        setSlider("shadows", 0);
+        document.querySelector("#curveButton").click();
+        await frames(4);
+        dispatchCurveDoubleClick(curveClientPoint(0.5, 0.75));
+        await frames(5);
+
+        const curveOn = readWhole(processedCanvas);
+
+        check(
+          "曲线生效时画面被改变",
+          curveOn[1] > sourceMean[1] + 8,
+          `G ${sourceMean[1].toFixed(1)} → ${curveOn[1].toFixed(1)}`,
+        );
+
+        document.querySelector("#closeCurveDialogButton").click();
+        await frames(2);
+        toggleSwitch("curvesEnabled", false);
+        await frames(5);
+
+        const curveOff = readWhole(processedCanvas);
+
+        check(
+          "取消勾选后曲线不再作用，画面回到原图",
+          curveOff.every((value, index) => near(value, sourceMean[index], 2)),
+          curveOff.map((value) => value.toFixed(1)).join("/"),
+        );
+        check(
+          "曲线行摘要显示已关闭",
+          document.querySelector("#curveRowValue").value === "关",
+          document.querySelector("#curveRowValue").value,
+        );
+
+        toggleSwitch("curvesEnabled", true);
+        await frames(5);
+
+        const curveBack = readWhole(processedCanvas);
+
+        check(
+          "重新勾选后曲线效果原样恢复",
+          curveBack.every((value, index) => near(value, curveOn[index], 1)),
+          curveBack.map((value) => value.toFixed(1)).join("/"),
+        );
+
+        // 色调分离：打开效果后关闭勾选，参数应保留
+        document.querySelector("#resetButton").click();
+        await frames(4);
+        document.querySelector("#posterizeButton").click();
+        await frames(5);
+        setSlider("posterizeLevels", 4);
+        await frames(5);
+
+        const posterizeOn = readWhole(processedCanvas);
+
+        toggleSwitch("posterizeEnabled", false);
+        await frames(5);
+
+        const posterizeOff = readWhole(processedCanvas);
+
+        check(
+          "取消勾选后色调分离不再作用，画面回到原图",
+          posterizeOff.every((value, index) => near(value, sourceMean[index], 2)),
+          posterizeOff.map((value) => value.toFixed(1)).join("/"),
+        );
+        check(
+          "色调分离行摘要显示已关闭",
+          document.querySelector("#posterizeRowValue").value === "关",
+          document.querySelector("#posterizeRowValue").value,
+        );
+        check(
+          "关闭后参数被保留（4 级仍在）",
+          document.querySelector("#posterizeLevels").value === "4",
+          document.querySelector("#posterizeLevels").value,
+        );
+
+        toggleSwitch("posterizeEnabled", true);
+        await frames(5);
+
+        const posterizeBack = readWhole(processedCanvas);
+
+        check(
+          "重新勾选后色调分离效果原样恢复",
+          posterizeBack.every((value, index) => near(value, posterizeOn[index], 1)),
+          posterizeBack.map((value) => value.toFixed(1)).join("/"),
+        );
+
+        // 窗口内重置会把勾选重新打开
+        toggleSwitch("posterizeEnabled", false);
+        await frames(4);
+        document.querySelector("#resetPosterizeButton").click();
+        await frames(5);
+
+        check(
+          "窗口内重置会重新勾选并回到默认效果",
+          document.querySelector("#posterizeEnabled").checked === true &&
+            document.querySelector("#posterizeLevels").value === "8",
+          `勾选=${document.querySelector("#posterizeEnabled").checked}`,
+        );
+
+        document.querySelector("#closePosterizeDialogButton").click();
+        await frames(2);
+
+        // 全局重置后勾选框回到默认
+        document.querySelector("#resetButton").click();
+        await frames(4);
+
+        check(
+          "全局重置后：曲线勾选、色调分离不勾选",
+          document.querySelector("#curvesEnabled").checked === true &&
+            document.querySelector("#posterizeEnabled").checked === false,
+          `曲线=${document.querySelector("#curvesEnabled").checked} 色调分离=${document.querySelector("#posterizeEnabled").checked}`,
+        );
+        // 15. 高光 / 阴影的针对性
+        document.querySelector("#resetButton").click();
+        await frames(4);
+
+        check(
+          "高光滑条存在且可输入数字",
+          Boolean(
+            document.querySelector("#highlights") &&
+              document.querySelector("#highlightsNumber"),
+          ),
+        );
+
+        const darkRegion = [0, 10, 140, 100];
+        const brightRegion = [170, 10, 150, 100];
+        const darkBase = readRegion(processedCanvas, ...darkRegion);
+        const brightBase = readRegion(processedCanvas, ...brightRegion);
+
+        setSlider("highlights", 80);
+        await frames(5);
+
+        const darkHighlighted = readRegion(processedCanvas, ...darkRegion);
+        const brightHighlighted = readRegion(processedCanvas, ...brightRegion);
+        const brightUp = brightHighlighted[1] - brightBase[1];
+        const darkUp = Math.abs(darkHighlighted[1] - darkBase[1]);
+
+        check(
+          "高光 +80 明显提亮亮部",
+          brightUp > 12,
+          `亮部 G ${brightBase[1].toFixed(1)} → ${brightHighlighted[1].toFixed(1)}（+${brightUp.toFixed(1)}）`,
+        );
+        check(
+          "高光主要作用于亮部，暗部基本不动",
+          darkUp < brightUp / 2.5,
+          `亮部 +${brightUp.toFixed(1)}，暗部 ${darkUp.toFixed(1)}`,
+        );
+
+        setSlider("highlights", -80);
+        await frames(5);
+
+        const brightRecovered = readRegion(processedCanvas, ...brightRegion);
+
+        check(
+          "高光 -80 压暗亮部（等效恢复高光）",
+          brightRecovered[1] < brightBase[1] - 10,
+          `亮部 G ${brightBase[1].toFixed(1)} → ${brightRecovered[1].toFixed(1)}`,
+        );
+
+        setSlider("highlights", 0);
+        setSlider("shadows", 80);
+        await frames(5);
+
+        const darkLifted = readRegion(processedCanvas, ...darkRegion);
+        const brightLifted = readRegion(processedCanvas, ...brightRegion);
+        const darkLift = darkLifted[1] - darkBase[1];
+        const brightLift = Math.abs(brightLifted[1] - brightBase[1]);
+
+        check(
+          "阴影 +80 明显提亮暗部",
+          darkLift > 12,
+          `暗部 G ${darkBase[1].toFixed(1)} → ${darkLifted[1].toFixed(1)}（+${darkLift.toFixed(1)}）`,
+        );
+        check(
+          "阴影主要作用于暗部，亮部基本不动",
+          brightLift < darkLift / 2.5,
+          `暗部 +${darkLift.toFixed(1)}，亮部 ${brightLift.toFixed(1)}`,
+        );
+
+        setSlider("shadows", 0);
+        await frames(4);
+
+        check(
+          "两个滑条归零后回到原图",
+          readWhole(processedCanvas).every((value, index) =>
+            near(value, sourceMean[index], 2),
+          ),
+          readWhole(processedCanvas).map((value) => value.toFixed(1)).join("/"),
+        );
+
+        // 16. 旋转与裁切：直接在图片框上完成
+        document.querySelector("#resetButton").click();
+        setSelect("whiteBalanceMode", "off");
+        await frames(5);
+
+        const geometryBar = document.querySelector("#geometryBar");
+
+        check("载入图片后出现旋转裁切工具条", geometryBar && !geometryBar.hidden);
+        check(
+          "工具条上旋转 / 翻转 / 裁切 / 还原按钮齐全",
+          [
+            "rotateLeftButton",
+            "rotateRightButton",
+            "flipHorizontalButton",
+            "flipVerticalButton",
+            "cropButton",
+            "cropAutoButton",
+            "resetGeometryButton",
+          ].every((id) => Boolean(document.querySelector("#" + id))),
+        );
+
+        const baseSize = canvasSize(processedCanvas);
+        const baseMean = readWhole(processedCanvas);
+
+        check(
+          "未旋转时读数显示未调整",
+          document.querySelector("#geometryReadout").textContent === "未调整",
+          document.querySelector("#geometryReadout").textContent,
+        );
+
+        // 右转 90°：画布长宽互换，原图左下角的红块搬到左上角
+        clickButton("rotateRightButton");
+        await frames(6);
+
+        const rotatedSize = canvasSize(processedCanvas);
+        const rotatedCorner = readRegion(processedCanvas, 0, 0, 60, 60);
+
+        check(
+          "右转 90° 后画布长宽互换",
+          rotatedSize.width === baseSize.height &&
+            rotatedSize.height === baseSize.width,
+          `${baseSize.width}×${baseSize.height} → ${rotatedSize.width}×${rotatedSize.height}`,
+        );
+        check(
+          "右转 90° 后原图左下角的红块转到左上角",
+          rotatedCorner[0] - rotatedCorner[2] > 60,
+          `左上角 R-B=${(rotatedCorner[0] - rotatedCorner[2]).toFixed(1)}`,
+        );
+        check(
+          "旋转读数随角度更新",
+          document.querySelector("#geometryReadout").textContent === "旋转 90°",
+          document.querySelector("#geometryReadout").textContent,
+        );
+
+        // 导出必须和预览完全一致：同一个 90° 旋转下取同一块区域比对
+        const rotatedExport = await captureExport();
+        const rotatedExportCorner = rotatedExport
+          ? readRegion(rotatedExport.canvas, 0, 0, 60, 60)
+          : null;
+
+        check(
+          "旋转 90° 后导出尺寸与预览一致",
+          rotatedExport &&
+            rotatedExport.width === rotatedSize.width &&
+            rotatedExport.height === rotatedSize.height,
+          rotatedExport
+            ? `导出 ${rotatedExport.width}×${rotatedExport.height}，预览 ${rotatedSize.width}×${rotatedSize.height}`
+            : "没有拿到导出文件",
+        );
+        check(
+          "旋转 90° 后导出画面与预览一致（左上角同样转成红块）",
+          rotatedExportCorner &&
+            near(rotatedExportCorner[0], rotatedCorner[0], 4) &&
+            near(rotatedExportCorner[2], rotatedCorner[2], 4),
+          rotatedExportCorner
+            ? `导出 ${rotatedExportCorner.map((value) => value.toFixed(1)).join("/")}，预览 ${rotatedCorner
+                .map((value) => value.toFixed(1))
+                .join("/")}`
+            : "没有拿到导出文件",
+        );
+
+        // 再左转三次凑满一圈，画面应当回到原样
+        for (let index = 0; index < 3; index += 1) {
+          clickButton("rotateLeftButton");
+          await frames(4);
+        }
+
+        const circleSize = canvasSize(processedCanvas);
+
+        check(
+          "转满一圈后画布尺寸恢复",
+          circleSize.width === baseSize.width &&
+            circleSize.height === baseSize.height,
+          `${circleSize.width}×${circleSize.height}`,
+        );
+        check(
+          "转满一圈后画面与原图一致",
+          readWhole(processedCanvas).every((value, index) =>
+            near(value, baseMean[index], 2),
+          ),
+          readWhole(processedCanvas).map((value) => value.toFixed(1)).join("/"),
+        );
+
+        // 水平翻转：左下角的红块与右下角的灰卡互换左右
+        clickButton("flipHorizontalButton");
+        await frames(6);
+
+        const flippedLeft = readRegion(processedCanvas, 0, 120, 80, 80);
+        const flippedRight = readRegion(processedCanvas, 240, 120, 80, 80);
+
+        check(
+          "水平翻转后红块搬到右边、灰卡搬到左边",
+          flippedRight[0] - flippedRight[2] > 60 &&
+            flippedLeft[0] - flippedLeft[2] < 30,
+          `左 R-B=${(flippedLeft[0] - flippedLeft[2]).toFixed(1)}，右 R-B=${(
+            flippedRight[0] - flippedRight[2]
+          ).toFixed(1)}`,
+        );
+
+        clickButton("flipHorizontalButton");
+        await frames(5);
+
+        // 微调角度：画布按外接矩形放大，四角变成透明
+        setRotationAngle(10);
+        await frames(6);
+
+        const tiltedSize = canvasSize(processedCanvas);
+
+        check(
+          "微调 10° 后画布按外接矩形放大",
+          tiltedSize.width > baseSize.width && tiltedSize.height > baseSize.height,
+          `${baseSize.width}×${baseSize.height} → ${tiltedSize.width}×${tiltedSize.height}`,
+        );
+        check(
+          "角度滑条跟随数字框",
+          near(rotationAngleValue(), 10, 0.001),
+          String(rotationAngleValue()),
+        );
+        check(
+          "旋转后左上角是透明的空白",
+          regionAlpha(processedCanvas, 0, 0, 6, 6) < 8,
+          `alpha=${regionAlpha(processedCanvas, 0, 0, 6, 6).toFixed(1)}`,
+        );
+
+        // 没有裁切时导出 PNG，透明角要保持透明
+        const tiltedExport = await captureExport();
+
+        check(
+          "未裁切时导出画布也是旋转后的外接矩形",
+          tiltedExport &&
+            tiltedExport.width === tiltedSize.width &&
+            tiltedExport.height === tiltedSize.height,
+          tiltedExport
+            ? `导出 ${tiltedExport.width}×${tiltedExport.height}，预览 ${tiltedSize.width}×${tiltedSize.height}`
+            : "没有拿到导出文件",
+        );
+        check(
+          "PNG 导出保留旋转留下的透明角",
+          tiltedExport && regionAlpha(tiltedExport.canvas, 0, 0, 6, 6) < 8,
+          tiltedExport
+            ? `alpha=${regionAlpha(tiltedExport.canvas, 0, 0, 6, 6).toFixed(1)}，格式=${tiltedExport.type}`
+            : "没有拿到导出画布",
+        );
+
+        // 裁切模式：显示整幅旋转画面 + 裁切框，自动去掉空白角
+        clickButton("cropButton");
+        await frames(6);
+
+        check(
+          "进入裁切模式后画面恢复成整幅旋转画面",
+          canvasSize(processedCanvas).width === tiltedSize.width,
+          `${canvasSize(processedCanvas).width}×${canvasSize(processedCanvas).height}`,
+        );
+        check(
+          "裁切模式显示裁切尺寸读数",
+          /^裁切 \d+ × \d+$/.test(
+            document.querySelector("#geometryReadout").textContent,
+          ),
+          document.querySelector("#geometryReadout").textContent,
+        );
+        check(
+          "裁切框与遮罩显示在画面上",
+          !document.querySelector("#cropOverlay").hidden &&
+            document
+              .querySelector("#cropBox")
+              .getBoundingClientRect().width > 20,
+          `${document.querySelector("#cropBox").getBoundingClientRect().width}`,
+        );
+
+        clickButton("cropAutoButton");
+        await frames(5);
+
+        const autoCropText = document.querySelector("#geometryReadout").textContent;
+
+        clickButton("cropApplyButton");
+        await frames(6);
+
+        const autoSize = canvasSize(processedCanvas);
+
+        check(
+          "去掉空白后裁切框变小",
+          autoSize.width < tiltedSize.width && autoSize.height < tiltedSize.height,
+          `${autoCropText} → ${autoSize.width}×${autoSize.height}`,
+        );
+        check(
+          "自动裁切后四角不再有空白",
+          regionAlpha(processedCanvas, 0, 0, 80, 80) > 250,
+          `alpha=${regionAlpha(processedCanvas, 0, 0, 80, 80).toFixed(1)}`,
+        );
+        check(
+          "自动裁切后整幅画面没有一个透明像素",
+          regionAlpha(processedCanvas, 0, 0, autoSize.width, autoSize.height) >
+            254.5,
+          `平均 alpha=${regionAlpha(
+            processedCanvas,
+            0,
+            0,
+            autoSize.width,
+            autoSize.height,
+          ).toFixed(2)}`,
+        );
+        check(
+          "原图面板与校色面板用同一套几何（同样没有空白）",
+          regionAlpha(
+            originalCanvas,
+            0,
+            0,
+            originalCanvas.width,
+            originalCanvas.height,
+          ) > 254.5 &&
+            originalCanvas.width === processedCanvas.width,
+          `原图 ${originalCanvas.width}×${originalCanvas.height}，平均 alpha=${regionAlpha(
+            originalCanvas,
+            0,
+            0,
+            originalCanvas.width,
+            originalCanvas.height,
+          ).toFixed(2)}`,
+        );
+
+        // 比例锁定：选 1:1 后应用，输出应当是正方形
+        clickButton("cropButton");
+        await frames(5);
+        setSelect("cropAspect", "1:1");
+        await frames(5);
+
+        const squareBox = document
+          .querySelector("#cropBox")
+          .getBoundingClientRect();
+
+        check(
+          "选择 1:1 后裁切框变成正方形",
+          Math.abs(squareBox.width - squareBox.height) < 3,
+          `${squareBox.width.toFixed(1)}×${squareBox.height.toFixed(1)}`,
+        );
+
+        // 框内拖动：整体平移，不改变大小
+        const beforeDrag = document
+          .querySelector("#cropBox")
+          .getBoundingClientRect();
+
+        dispatchCropDrag(
+          document.querySelector("#cropBox"),
+          cropBoxClientPoint(0.5, 0.5),
+          cropBoxClientPoint(0.2, 0.3),
+        );
+        await frames(4);
+
+        const afterDrag = document
+          .querySelector("#cropBox")
+          .getBoundingClientRect();
+
+        check(
+          "拖动裁切框可以整体移动",
+          afterDrag.left < beforeDrag.left - 5 &&
+            afterDrag.top < beforeDrag.top - 5 &&
+            Math.abs(afterDrag.width - beforeDrag.width) < 3,
+          `${beforeDrag.left.toFixed(0)},${beforeDrag.top.toFixed(0)} → ${afterDrag.left.toFixed(0)},${afterDrag.top.toFixed(0)}`,
+        );
+
+        // 拉手柄：改变大小
+        const handleRect = document
+          .querySelector('.crop-handle[data-handle="se"]')
+          .getBoundingClientRect();
+
+        dispatchCropDrag(
+          document.querySelector('.crop-handle[data-handle="se"]'),
+          { x: handleRect.left + 4, y: handleRect.top + 4 },
+          { x: handleRect.left - 40, y: handleRect.top - 40 },
+        );
+        await frames(4);
+
+        const resizedBox = document
+          .querySelector("#cropBox")
+          .getBoundingClientRect();
+
+        check(
+          "拖动角手柄可以改小裁切框",
+          resizedBox.width < afterDrag.width - 10 &&
+            Math.abs(resizedBox.width - resizedBox.height) < 4,
+          `${afterDrag.width.toFixed(1)} → ${resizedBox.width.toFixed(1)}`,
+        );
+
+        clickButton("cropApplyButton");
+        await frames(6);
+
+        const squareSize = canvasSize(processedCanvas);
+
+        check(
+          "应用 1:1 裁切后输出是正方形",
+          Math.abs(squareSize.width - squareSize.height) <= 1,
+          `${squareSize.width}×${squareSize.height}`,
+        );
+
+        const cropExport = await captureExport();
+
+        check(
+          "裁切后的导出尺寸等于裁切框的像素尺寸",
+          cropExport &&
+            cropExport.width === squareSize.width &&
+            cropExport.height === squareSize.height,
+          cropExport
+            ? `导出 ${cropExport.width}×${cropExport.height}，预览 ${squareSize.width}×${squareSize.height}`
+            : "没有拿到导出文件",
+        );
+
+        // 在裁切框外按下并拖动，可以重新拉一个新框
+        clickButton("cropButton");
+        await frames(5);
+        setSelect("cropAspect", "free");
+        await frames(4);
+
+        const startBox = document
+          .querySelector("#cropBox")
+          .getBoundingClientRect();
+
+        dispatchCropDrag(
+          document.querySelector("#cropOverlay"),
+          {
+            x: startBox.left + startBox.width * 0.25,
+            y: startBox.top + startBox.height * 0.25,
+          },
+          {
+            x: startBox.left + startBox.width * 0.75,
+            y: startBox.top + startBox.height * 0.75,
+          },
+        );
+        await frames(5);
+
+        const redrawnBox = document
+          .querySelector("#cropBox")
+          .getBoundingClientRect();
+
+        check(
+          "在框外拖动可以重新拉一个裁切框",
+          Math.abs(redrawnBox.width - startBox.width / 2) < 6 &&
+            Math.abs(redrawnBox.height - startBox.height / 2) < 6,
+          `${startBox.width.toFixed(0)}×${startBox.height.toFixed(0)} → ${redrawnBox.width.toFixed(0)}×${redrawnBox.height.toFixed(0)}`,
+        );
+
+        clickButton("cropCancelButton");
+        await frames(5);
+
+        // 取消裁切：回到进入裁切模式前的裁切框
+        clickButton("cropButton");
+        await frames(5);
+        clickButton("cropCancelButton");
+        await frames(6);
+
+        check(
+          "取消裁切后回到原来的裁切尺寸",
+          canvasSize(processedCanvas).width === squareSize.width,
+          `${canvasSize(processedCanvas).width}×${canvasSize(processedCanvas).height}`,
+        );
+
+        // 还原：旋转、翻转、裁切一起清掉
+        clickButton("resetGeometryButton");
+        await frames(6);
+
+        check(
+          "还原后画布回到原始尺寸",
+          canvasSize(processedCanvas).width === baseSize.width &&
+            canvasSize(processedCanvas).height === baseSize.height,
+          `${canvasSize(processedCanvas).width}×${canvasSize(processedCanvas).height}`,
+        );
+        check(
+          "还原后画面等于原图",
+          readWhole(processedCanvas).every((value, index) =>
+            near(value, baseMean[index], 2),
+          ),
+          readWhole(processedCanvas).map((value) => value.toFixed(1)).join("/"),
+        );
+        check(
+          "还原后读数回到未调整",
+          document.querySelector("#geometryReadout").textContent === "未调整",
+          document.querySelector("#geometryReadout").textContent,
+        );
+
+        // 拖动参数面板改变预览区高度后，裁切框要重新贴合画面
+        clickButton("cropButton");
+        await frames(5);
+        splitterDragTo(window.innerHeight - 150);
+        await frames(6);
+
+        const boxRect = document
+          .querySelector("#cropBox")
+          .getBoundingClientRect();
+        const canvasRect = processedCanvas.getBoundingClientRect();
+        const boxCenter = {
+          x: boxRect.left + boxRect.width / 2,
+          y: boxRect.top + boxRect.height / 2,
+        };
+        const canvasCenter = {
+          x: canvasRect.left + canvasRect.width / 2,
+          y: canvasRect.top + canvasRect.height / 2,
+        };
+
+        check(
+          "拖动参数面板后裁切框仍然贴合画面",
+          Math.abs(boxCenter.x - canvasCenter.x) < 2 &&
+            Math.abs(boxCenter.y - canvasCenter.y) < 2,
+          `裁切框中心 ${boxCenter.x.toFixed(0)},${boxCenter.y.toFixed(0)}，画面中心 ${canvasCenter.x.toFixed(0)},${canvasCenter.y.toFixed(0)}`,
+        );
+
+        document
+          .querySelector("#panelSplitter")
+          .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+        await frames(4);
+        clickButton("cropCancelButton");
+        await frames(5);
+
+        // 旋转之后灰点拾色依然有效：灰卡转到左下角后仍然是中性灰
+        setSelect("whiteBalanceMode", "grayPoint");
+        await frames(4);
+        clickCanvasPixel(processedCanvas, 280, 160);
+        await frames(5);
+        clickButton("rotateRightButton");
+        await frames(7);
+
+        const rotatedCard = readRegion(processedCanvas, 0, 250, 70, 60);
+        const cardCast = Math.abs(rotatedCard[0] - rotatedCard[1]) +
+          Math.abs(rotatedCard[1] - rotatedCard[2]);
+
+        check(
+          "旋转 90° 后灰点仍然参与白平衡（灰卡仍为中性）",
+          cardCast < 12,
+          `灰卡 R/G/B=${rotatedCard.map((value) => value.toFixed(1)).join("/")}`,
+        );
+        check(
+          "旋转后灰点标记仍然显示在画面上",
+          Array.from(document.querySelectorAll(".neutral-picker-mark")).some(
+            (marker) => !marker.hidden && marker.style.left !== "",
+          ),
+          Array.from(document.querySelectorAll(".neutral-picker-mark"))
+            .map((marker) => `${marker.hidden ? "hidden" : marker.style.left}`)
+            .join(" | "),
+        );
+
+        clickButton("resetGeometryButton");
+        setSelect("whiteBalanceMode", "off");
+        await frames(5);
+      }
+
+      run()
+        .catch((error) => {
+          check("测试脚本执行完成", false, error && error.stack ? error.stack : String(error));
+        })
+        .finally(() => {
+          check(
+            "页面没有未捕获的脚本错误",
+            errors.length === 0,
+            errors.join(" | "),
+          );
+
+          const failed = results.filter((item) => !item.ok);
+          const lines = results.map(
+            (item) => `${item.ok ? "PASS" : "FAIL"} ${item.name}${item.detail ? " :: " + item.detail : ""}`,
+          );
+          const toast = document.querySelector("#toast");
+
+          lines.push(
+            "TOAST " +
+              (toast ? JSON.stringify(toast.textContent) : "(none)") +
+              " isError=" +
+              (toast ? toast.classList.contains("is-error") : "-"),
+          );
+
+          document.title = `RESULT ${results.length - failed.length}/${results.length}`;
+          document.querySelector("#report").textContent =
+            lines.join("\n") + "\n--\n" + document.title;
+        });
+    </script>
+  </body>
+</html>

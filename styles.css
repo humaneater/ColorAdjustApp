@@ -52,11 +52,12 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-rows: auto minmax(220px, 1fr) auto;
+  grid-template-rows: auto minmax(160px, 1fr) auto var(--controls-height, auto);
   width: 100%;
   height: 100vh;
   height: 100dvh;
   min-height: 520px;
+  --controls-height: auto;
 }
 
 .app-header {
@@ -194,6 +195,7 @@ input[type="range"]:focus-visible {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
   padding: 14px 14px 0;
   overflow: hidden;
@@ -215,6 +217,11 @@ input[type="range"]:focus-visible {
   overflow: hidden;
   border: 1px solid #282d34;
   background: #090a0c;
+}
+
+.preview-panel,
+.preview-divider {
+  grid-row: 1;
 }
 
 .preview-panel:first-child {
@@ -325,9 +332,252 @@ input[type="range"]:focus-visible {
   stroke-width: 1.7;
 }
 
+/* ---- 画面几何：旋转 / 翻转 / 裁切（直接在图片框上操作） ---- */
+
+.geometry-bar {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 14px;
+  padding: 8px 0 10px;
+}
+
+.geometry-bar[hidden] {
+  display: none;
+}
+
+.geometry-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.geometry-label {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.geometry-angle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-left: 4px;
+}
+
+.geometry-angle > span:first-child {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.geometry-angle .slider-wrap {
+  width: 150px;
+}
+
+.geometry-angle .number-input {
+  width: 64px;
+}
+
+.geometry-unit {
+  margin-left: -4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.geometry-crop-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.geometry-crop-controls[hidden] {
+  display: none;
+}
+
+.geometry-aspect {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.geometry-aspect select {
+  height: 28px;
+  padding: 0 22px 0 8px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-strong);
+  font-size: 12px;
+}
+
+.geometry-readout {
+  min-width: 104px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.geometry-readout.is-active {
+  color: var(--accent-strong);
+}
+
+/* 裁切框：盖在右侧画面上，框外压暗，八个手柄 + 三分线 */
+
+.crop-overlay {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.crop-overlay[hidden] {
+  display: none;
+}
+
+.crop-shade {
+  position: absolute;
+  background: rgba(6, 8, 11, 0.6);
+  pointer-events: none;
+}
+
+.crop-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.94);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.5),
+    0 0 16px rgba(0, 0, 0, 0.45);
+  cursor: move;
+  touch-action: none;
+}
+
+.crop-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.34) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.34) 1px, transparent 1px);
+  background-size: calc(100% / 3) calc(100% / 3);
+}
+
+.crop-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.55);
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.crop-handle[data-handle="nw"] {
+  top: -6px;
+  left: -6px;
+  cursor: nwse-resize;
+}
+
+.crop-handle[data-handle="n"] {
+  top: -6px;
+  left: 50%;
+  margin-left: -6px;
+  cursor: ns-resize;
+}
+
+.crop-handle[data-handle="ne"] {
+  top: -6px;
+  right: -6px;
+  cursor: nesw-resize;
+}
+
+.crop-handle[data-handle="e"] {
+  top: 50%;
+  right: -6px;
+  margin-top: -6px;
+  cursor: ew-resize;
+}
+
+.crop-handle[data-handle="se"] {
+  right: -6px;
+  bottom: -6px;
+  cursor: nwse-resize;
+}
+
+.crop-handle[data-handle="s"] {
+  bottom: -6px;
+  left: 50%;
+  margin-left: -6px;
+  cursor: ns-resize;
+}
+
+.crop-handle[data-handle="sw"] {
+  bottom: -6px;
+  left: -6px;
+  cursor: nesw-resize;
+}
+
+.crop-handle[data-handle="w"] {
+  top: 50%;
+  left: -6px;
+  margin-top: -6px;
+  cursor: ew-resize;
+}
+
+/* ---- 参数面板分隔条：拖动即可调整面板高度 ---- */
+
+.panel-splitter {
+  position: relative;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  height: 8px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.panel-splitter:hover,
+.panel-splitter.is-dragging {
+  background: var(--surface-strong);
+}
+
+.panel-splitter:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.panel-splitter-grip {
+  width: 54px;
+  height: 3px;
+  border-radius: 2px;
+  background: #454e5a;
+}
+
+.panel-splitter:hover .panel-splitter-grip,
+.panel-splitter.is-dragging .panel-splitter-grip {
+  background: var(--accent);
+}
+
 .controls {
   position: relative;
   z-index: 5;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-top: 1px solid var(--line);
   background: var(--surface);
 }
@@ -343,6 +593,42 @@ input[type="range"]:focus-visible {
   opacity: 0.44;
 }
 
+/* ---- 分组：宽屏上自动排成多列 ---- */
+
+.control-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  align-items: start;
+  gap: 6px 30px;
+}
+
+.control-group {
+  min-width: 0;
+}
+
+.control-group + .control-group {
+  padding-left: 0;
+}
+
+.control-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 2px;
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 720;
+  letter-spacing: 0.4px;
+  line-height: 1.6;
+}
+
+.control-group-title::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: linear-gradient(90deg, var(--line-strong), transparent);
+}
+
 .control-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -350,31 +636,162 @@ input[type="range"]:focus-visible {
 
 .control-row {
   display: grid;
-  grid-template-columns: 108px minmax(120px, 1fr) 58px;
+  grid-template-columns: 104px minmax(110px, 1fr) 74px;
   align-items: center;
-  gap: 14px;
-  min-height: 39px;
+  gap: 12px;
+  min-height: 36px;
 }
 
-.control-row label {
+.control-row label,
+.control-label {
   color: #d7dce3;
   font-size: 13px;
   font-weight: 560;
   line-height: 1;
 }
 
-.control-row output {
+.control-row output,
+.control-row-value {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 660;
   line-height: 1;
   text-align: right;
 }
 
-.control-row.is-active output {
+.control-row.is-active output,
+.control-row.is-active .control-row-value {
   color: var(--accent-strong);
 }
+
+.control-row-action .control-button {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 28px;
+  min-width: 0;
+  padding: 0 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.control-action-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* ---- 开关勾选框：一键开启 / 关闭某个效果，方便对比 ---- */
+
+.control-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.control-switch input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.control-switch-box {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #101319;
+  transition:
+    border-color 130ms ease,
+    background-color 130ms ease;
+}
+
+.control-switch-box svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: #19140b;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3.2;
+  opacity: 0;
+  transition: opacity 130ms ease;
+}
+
+.control-switch-text {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+.control-switch:hover .control-switch-box {
+  border-color: #596372;
+}
+
+.control-switch input:checked + .control-switch-box {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.control-switch input:checked + .control-switch-box svg {
+  opacity: 1;
+}
+
+.control-switch input:checked ~ .control-switch-text {
+  color: var(--accent-strong);
+}
+
+.control-switch input:focus-visible + .control-switch-box {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.fieldset-disabled .control-switch,
+.controls-fieldset:disabled .control-switch {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* ---- 数字输入框：每个滑条都可以直接键入数值 ---- */
+
+.number-input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 4px 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  background: #101319;
+  font: inherit;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 620;
+  text-align: right;
+}
+
+.number-input:hover {
+  border-color: var(--line-strong);
+}
+
+.number-input:focus {
+  border-color: var(--focus);
+  outline: none;
+}
+
+.control-row.is-active .number-input {
+  border-color: rgba(244, 183, 77, 0.55);
+}
+
 
 .slider-wrap {
   position: relative;
@@ -456,6 +873,87 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   transform: translate(-50%, -50%);
 }
 
+/* ---- 白平衡方式下拉菜单与随方式显示的行 ---- */
+
+.select-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.control-row select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 28px 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface-strong);
+  cursor: pointer;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+}
+
+.control-row select:hover:not(:disabled) {
+  border-color: #596372;
+}
+
+.control-row select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.control-row select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.control-row.is-active select {
+  border-color: rgba(244, 183, 77, 0.62);
+}
+
+.control-row-hint .control-hint {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.neutral-picker-mark {
+  position: absolute;
+  z-index: 3;
+  width: 24px;
+  height: 24px;
+  margin: -12px 0 0 -12px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.85),
+    0 0 10px rgba(0, 0, 0, 0.65);
+  pointer-events: none;
+}
+
+.neutral-picker-mark::after {
+  content: "";
+  position: absolute;
+  inset: 9px;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.preview-panel.is-picking {
+  box-shadow: inset 0 0 0 1px rgba(244, 183, 77, 0.55);
+}
+
+.preview-panel.is-picking .preview-canvas {
+  cursor: crosshair;
+}
+
+.preview-panel.is-cropping {
+  box-shadow: inset 0 0 0 1px rgba(244, 183, 77, 0.55);
+}
+
 .ai-panel {
   display: grid;
   grid-template-columns:
@@ -520,7 +1018,11 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .ai-strength-field {
-  grid-template-columns: auto minmax(90px, 1fr) 44px;
+  grid-template-columns: auto minmax(90px, 1fr) 68px;
+}
+
+.ai-strength-field .number-input {
+  height: 30px;
 }
 
 .ai-field output {
@@ -599,6 +1101,240 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   color: var(--text);
   background: var(--surface);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.58);
+}
+
+/* ---- 曲线窗口：非模态浮动面板，调整时能直接看到画面变化 ---- */
+
+.curve-dialog {
+  position: fixed;
+  z-index: 15;
+  top: 76px;
+  left: 18px;
+  right: auto;
+  width: 330px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 92px);
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.6);
+}
+
+.curve-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.curve-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.curve-head p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.curve-head .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+.curve-channels {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 11px 0 9px;
+}
+
+.curve-channel {
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.curve-channel:hover {
+  border-color: #596372;
+  color: var(--text);
+}
+
+.curve-channel.is-active {
+  border-color: var(--accent);
+  color: #19140b;
+  background: var(--accent);
+}
+
+.curve-channel:focus-visible,
+.curve-canvas:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.curve-canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0b0e12;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.curve-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 9px;
+}
+
+.curve-point-value {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.curve-foot .button {
+  flex: 0 0 auto;
+}
+
+/* ---- 色调分离窗口 ---- */
+
+.posterize-dialog {
+  position: fixed;
+  z-index: 15;
+  top: 76px;
+  left: 18px;
+  right: auto;
+  width: 330px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 92px);
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.6);
+}
+
+.posterize-preview {
+  display: block;
+  width: 100%;
+  height: 48px;
+  margin: 11px 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #0b0e12;
+}
+
+.posterize-field {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  color: #d7dce3;
+  font-size: 12.5px;
+  font-weight: 560;
+}
+
+.posterize-mode-field {
+  grid-template-columns: 46px minmax(0, 1fr);
+  margin-top: 8px;
+}
+
+.posterize-slider {
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+}
+
+.posterize-channels {
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+}
+
+.posterize-field output {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 660;
+  text-align: right;
+}
+
+.posterize-field select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 26px 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface-strong);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.posterize-field select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.posterize-field select:hover {
+  border-color: #596372;
+}
+
+.posterize-channel-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.posterize-channel {
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 660;
+}
+
+.posterize-channel:hover {
+  border-color: #596372;
+  color: var(--text);
+}
+
+.posterize-channel.is-active {
+  border-color: var(--accent);
+  color: #19140b;
+  background: var(--accent);
+}
+
+.posterize-channel:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .settings-dialog::backdrop {
@@ -699,13 +1435,20 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 @media (min-width: 1120px) and (max-height: 820px) {
-  .control-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    column-gap: 34px;
+  .control-groups {
+    grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+    gap: 4px 22px;
   }
 
   .control-row {
-    grid-template-columns: 98px minmax(100px, 1fr) 52px;
+    grid-template-columns: 92px minmax(90px, 1fr) 68px;
+    gap: 10px;
+    min-height: 33px;
+  }
+
+  .control-row label,
+  .control-label {
+    font-size: 12.5px;
   }
 
   .ai-panel {
@@ -767,19 +1510,112 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
     font-size: 10px;
   }
 
+  .geometry-bar {
+    gap: 6px;
+    padding: 6px 0 8px;
+  }
+
+  .geometry-group {
+    width: 100%;
+    justify-content: space-between;
+    padding: 5px 8px;
+  }
+
+  .geometry-angle {
+    flex: 1;
+  }
+
+  .geometry-angle .slider-wrap {
+    flex: 1;
+    width: auto;
+  }
+
+  .geometry-angle .number-input {
+    width: 56px;
+  }
+
+  .geometry-readout {
+    min-width: 0;
+  }
+
+  .crop-handle {
+    width: 14px;
+    height: 14px;
+  }
+
+  .crop-handle[data-handle="nw"] {
+    top: -7px;
+    left: -7px;
+  }
+
+  .crop-handle[data-handle="n"] {
+    top: -7px;
+    margin-left: -7px;
+  }
+
+  .crop-handle[data-handle="ne"] {
+    top: -7px;
+    right: -7px;
+  }
+
+  .crop-handle[data-handle="e"] {
+    right: -7px;
+    margin-top: -7px;
+  }
+
+  .crop-handle[data-handle="se"] {
+    right: -7px;
+    bottom: -7px;
+  }
+
+  .crop-handle[data-handle="s"] {
+    bottom: -7px;
+    margin-left: -7px;
+  }
+
+  .crop-handle[data-handle="sw"] {
+    bottom: -7px;
+    left: -7px;
+  }
+
+  .crop-handle[data-handle="w"] {
+    left: -7px;
+    margin-top: -7px;
+  }
+
   .controls-fieldset {
     padding: 6px 8px 8px;
   }
 
+  .control-groups {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
   .control-row {
-    grid-template-columns: 82px minmax(70px, 1fr) 42px;
+    grid-template-columns: 76px minmax(56px, 1fr) 62px;
     gap: 8px;
-    min-height: 36px;
+    min-height: 34px;
   }
 
   .control-row label,
-  .control-row output {
+  .control-label,
+  .control-row output,
+  .control-row-value {
     font-size: 12px;
+  }
+
+  .number-input {
+    font-size: 12px;
+  }
+
+  .control-row select {
+    padding-right: 20px;
+    font-size: 11.5px;
+  }
+
+  .control-row-hint .control-hint {
+    font-size: 11px;
   }
 
   .ai-panel {
@@ -808,12 +1644,6 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
   .button-compact {
     min-width: 0;
-  }
-
-  .controls {
-    max-height: 60dvh;
-    overflow-y: auto;
-    overscroll-behavior: contain;
   }
 
   .settings-dialog form {
