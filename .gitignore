@@ -1,6 +1,9 @@
 # AI 处理结果：由本机 ComfyUI 生成的大尺寸 PNG，可通过重新处理得到，不入库
 outputs/
 
+# code review graph 数据库：含绝对路径与代码结构元数据，不入库
+.code-review-graph/
+
 # 运行时与缓存
 *.log
 *.tmp
